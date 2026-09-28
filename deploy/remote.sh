@@ -28,7 +28,7 @@ sudo systemctl restart nestjs-shortlink-api
 
 echo "==> Verifying service readiness..."
 retries=15
-until curl -sf http://127.0.0.1:3001/health/ready > /dev/null || [ $retries -eq 0 ]; do
+until curl -sf http://127.0.0.1:3020/health/ready > /dev/null || [ $retries -eq 0 ]; do
   echo "Waiting for app to start... ($retries retries left)"
   retries=$((retries-1))
   sleep 2
