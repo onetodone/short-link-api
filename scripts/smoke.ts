@@ -3,8 +3,8 @@
  *
  * Assumes the app is already listening on BASE_URL. Walks the critical path:
  * liveness, readiness (Postgres + Redis), the reported version, register, the
- * guarded create endpoint, the redirect (cache miss then hit), an unknown-code
- * 404, the Prometheus
+ * guarded create endpoint, the redirect (cache miss then hit), a bot that is
+ * redirected but not counted as a click, an unknown-code 404, the Prometheus
  * /metrics counters, and the refresh-session lifecycle (rotate, a racing tab
  * converges, logout revokes). Exits non-zero on the first failed check.
  *
@@ -15,6 +15,12 @@
 const BASE_URL = (process.env.BASE_URL ?? process.env.SHORT_URL_BASE ?? 'http://localhost:3000').replace(/\/+$/, '')
 const API_PREFIX = (process.env.API_PREFIX ?? 'api/v1').replace(/^\/+|\/+$/g, '')
 const BOOT_TIMEOUT_MS = Number(process.env.SMOKE_BOOT_TIMEOUT_MS ?? 60_000)
+const REDIRECT_STATUS = Number(process.env.REDIRECT_STATUS ?? 302)
+const CLICKS_TIMEOUT_MS = Math.max(15_000, 3 * Number(process.env.CLICKS_FLUSH_INTERVAL_MS ?? 5000))
+
+const BROWSER_UA =
+  'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0 Safari/537.36'
+const BOT_UA = 'Slackbot-LinkExpanding 1.0 (+https://api.slack.com/robots)'
 
 const apiUrl = (path: string): string => `${BASE_URL}/${API_PREFIX}/${path.replace(/^\/+/, '')}`
 
@@ -37,6 +43,12 @@ function assert(condition: boolean, message: string, detail?: unknown): void {
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms))
+}
+
+async function readMetric(name: string): Promise<number> {
+  const text = await (await fetch(`${BASE_URL}/metrics`)).text()
+  const line = text.split('\n').find((entry) => entry.startsWith(`${name} `))
+  return Number(line?.split(' ')[1] ?? Number.NaN)
 }
 
 function readRefreshCookie(res: Response): string | null {
@@ -148,15 +160,43 @@ async function main(): Promise<void> {
   assert(createBody.originalUrl === target, 'create echoed the normalised originalUrl', createBody)
   const shortCode = createBody.shortCode as string
 
-  // Resolve it twice — cache miss, then cache hit. Both must 301 to the target.
-  for (const attempt of ['miss', 'hit'] as const) {
-    const res = await fetch(`${BASE_URL}/${shortCode}`, { redirect: 'manual' })
-    assert(res.status === 301, `GET /${shortCode} (${attempt}) -> 301 (got ${res.status})`)
+  // A link-preview bot is redirected, but its hit is not counted as a click.
+  const botRedirectsBefore = await readMetric('http_redirects_bot_total')
+  {
+    const res = await fetch(`${BASE_URL}/${shortCode}`, { redirect: 'manual', headers: { 'user-agent': BOT_UA } })
+    assert(res.status === REDIRECT_STATUS, `GET /${shortCode} (bot) -> ${REDIRECT_STATUS} (got ${res.status})`)
+    assert(res.headers.get('location') === target, `GET /${shortCode} (bot) Location header -> target`)
+  }
+  const botRedirects = (await readMetric('http_redirects_bot_total')) - botRedirectsBefore
+  assert(botRedirects === 1, `/metrics http_redirects_bot_total grew by 1 (got ${botRedirects})`)
+
+  // Resolve it twice as a browser — cache hit after the bot's miss, then another hit.
+  for (const attempt of ['first', 'second'] as const) {
+    const res = await fetch(`${BASE_URL}/${shortCode}`, { redirect: 'manual', headers: { 'user-agent': BROWSER_UA } })
+    assert(res.status === REDIRECT_STATUS, `GET /${shortCode} (${attempt}) -> ${REDIRECT_STATUS} (got ${res.status})`)
     assert(
       res.headers.get('location') === target,
       `GET /${shortCode} (${attempt}) Location header -> target`,
       res.headers.get('location'),
     )
+    if (REDIRECT_STATUS === 302) {
+      const cacheControl = res.headers.get('cache-control')
+      assert(cacheControl === 'private, max-age=0', `GET /${shortCode} (${attempt}) is not cacheable`, cacheControl)
+    }
+  }
+
+  // Only the two browser hits reach the link's click count once the buffer is flushed.
+  {
+    const deadline = Date.now() + CLICKS_TIMEOUT_MS
+    let clicks = 0
+    while (Date.now() < deadline) {
+      const res = await fetch(apiUrl('urls'), { headers: { authorization: `Bearer ${accessToken}` } })
+      const body = (await res.json().catch(() => ({}))) as { items?: { shortCode: string; clicks: number }[] }
+      clicks = body.items?.find((item) => item.shortCode === shortCode)?.clicks ?? 0
+      if (clicks >= 2) break
+      await sleep(500)
+    }
+    assert(clicks === 2, `GET /${API_PREFIX}/urls reports 2 clicks, the bot excluded (got ${clicks})`)
   }
 
   // Unknown code -> 404.
@@ -170,7 +210,13 @@ async function main(): Promise<void> {
     const res = await fetch(`${BASE_URL}/metrics`)
     const text = await res.text()
     assert(res.status === 200, `GET /metrics -> 200 (got ${res.status})`)
-    for (const metric of ['urls_created_total', 'http_redirects_total', 'cache_hits_total', 'cache_misses_total']) {
+    for (const metric of [
+      'urls_created_total',
+      'http_redirects_total',
+      'http_redirects_bot_total',
+      'cache_hits_total',
+      'cache_misses_total',
+    ]) {
       assert(text.includes(metric), `/metrics exposes ${metric}`)
     }
   }
