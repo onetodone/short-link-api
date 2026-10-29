@@ -16,6 +16,12 @@ import type { FastifyReply, FastifyRequest } from 'fastify'
 
 import { API_PREFIX } from '@/common/api-prefix'
 import { parseDurationSeconds } from '@/common/duration.util'
+import {
+  CREDENTIALS_THROTTLE,
+  REFRESH_COOKIE,
+  REFRESH_COOKIE_PATH,
+  REFRESH_THROTTLE,
+} from '@/modules/auth/auth.constants'
 import { AuthService } from '@/modules/auth/auth.service'
 import type { AuthProfile, AuthResponse, AuthResult, AuthUser, RequestContext } from '@/modules/auth/auth.types'
 import { CurrentUser } from '@/modules/auth/current-user.decorator'
@@ -29,14 +35,10 @@ import { UserAgent } from '@/modules/auth/user-agent.decorator'
 import { UserIp } from '@/modules/auth/user-ip.decorator'
 import { VerificationService } from '@/modules/auth/verification.service'
 
-const REFRESH_COOKIE = 'refresh_token'
 const DEFAULT_REFRESH_MAX_AGE_SECONDS = 7 * 24 * 60 * 60
-const CREDENTIALS_THROTTLE = { default: { limit: 10, ttl: 60_000 } }
-const REFRESH_THROTTLE = { default: { limit: 120, ttl: 60_000 } }
 
 @Controller(`${API_PREFIX}/auth`)
 export class AuthController {
-  private readonly cookiePath: string
   private readonly cookieSecure: boolean
   private readonly refreshMaxAgeSeconds: number
 
@@ -45,7 +47,6 @@ export class AuthController {
     private readonly verification: VerificationService,
     config: ConfigService,
   ) {
-    this.cookiePath = `/${API_PREFIX}/auth`
     this.cookieSecure = config.get<string>('app.nodeEnv', 'production') === 'production'
     this.refreshMaxAgeSeconds = parseDurationSeconds(
       config.get<string>('jwt.refreshExpiresIn', '7d'),
@@ -106,7 +107,7 @@ export class AuthController {
     @Res({ passthrough: true }) reply: FastifyReply,
   ): Promise<void> {
     await this.auth.logout(sessionId)
-    reply.clearCookie(REFRESH_COOKIE, { path: this.cookiePath })
+    reply.clearCookie(REFRESH_COOKIE, { path: REFRESH_COOKIE_PATH })
   }
 
   @Post('logout-all')
@@ -114,7 +115,7 @@ export class AuthController {
   @UseGuards(JwtAuthGuard)
   async logoutAll(@CurrentUser('id') userId: string, @Res({ passthrough: true }) reply: FastifyReply): Promise<void> {
     await this.auth.logoutAll(userId)
-    reply.clearCookie(REFRESH_COOKIE, { path: this.cookiePath })
+    reply.clearCookie(REFRESH_COOKIE, { path: REFRESH_COOKIE_PATH })
   }
 
   @Get('me')
@@ -155,7 +156,7 @@ export class AuthController {
     @Res({ passthrough: true }) reply: FastifyReply,
   ): Promise<void> {
     await this.verification.resetPassword(dto.token, dto.password, { ip, userAgent })
-    reply.clearCookie(REFRESH_COOKIE, { path: this.cookiePath })
+    reply.clearCookie(REFRESH_COOKIE, { path: REFRESH_COOKIE_PATH })
   }
 
   private finish(reply: FastifyReply, result: AuthResult): AuthResponse {
@@ -163,7 +164,7 @@ export class AuthController {
       httpOnly: true,
       secure: this.cookieSecure,
       sameSite: 'strict',
-      path: this.cookiePath,
+      path: REFRESH_COOKIE_PATH,
       maxAge: this.refreshMaxAgeSeconds,
     })
 
