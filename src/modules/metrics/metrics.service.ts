@@ -6,7 +6,11 @@ const COUNTERS: readonly CounterMeta[] = [
   { name: 'cache_hits_total', help: 'Short-code resolutions served from the Redis cache (incl. negative hits)' },
   { name: 'cache_misses_total', help: 'Short-code resolutions that missed the Redis cache and hit Postgres' },
   { name: 'urls_created_total', help: 'Short Links created via POST /api/v1/urls' },
-  { name: 'http_redirects_total', help: 'Successful 301 redirects served by GET /:shortCode' },
+  { name: 'http_redirects_total', help: 'Successful redirects served by GET /:shortCode' },
+  {
+    name: 'http_redirects_bot_total',
+    help: 'Redirects not counted as clicks: bots, link-preview crawlers, prefetches and HEAD requests',
+  },
   { name: 'clicks_flushed_total', help: 'Buffered clicks reconciled into Postgres by the flush cycle' },
   { name: 'clicks_flush_errors_total', help: 'Click-buffer flush cycles that failed and were re-buffered' },
 ] as const

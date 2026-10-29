@@ -3,7 +3,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest'
 import { ClicksService } from '@/modules/urls/clicks.service'
 
 import { bearer, register, type Session } from './helpers/auth'
-import { startApp, type TestApp } from './helpers/app'
+import { BROWSER, startApp, type TestApp } from './helpers/app'
 
 let t: TestApp
 
@@ -155,7 +155,8 @@ describe('DELETE /api/v1/urls/:shortCode', () => {
   it('deletes the link, its cached redirect and its pending clicks', async () => {
     const session = await register(t.app)
     const { shortCode } = await createUrl(session, 'https://example.com')
-    expect((await t.app.inject({ method: 'GET', url: `/${shortCode}` })).statusCode).toBe(301)
+    expect((await t.app.inject({ method: 'GET', url: `/${shortCode}`, headers: BROWSER })).statusCode).toBe(302)
+    await expect.poll(() => t.redis.get(`clicks:${shortCode}`)).toBe('1')
 
     const response = await t.app.inject({
       method: 'DELETE',

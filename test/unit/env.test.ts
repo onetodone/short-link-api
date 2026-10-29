@@ -18,6 +18,7 @@ describe('validateEnv', () => {
       TRUSTED_PROXY: 'private',
       REDIS_TLS: false,
       SHORT_CODE_LENGTH: 7,
+      REDIRECT_STATUS: 302,
       THROTTLE_LIMIT: 100,
     })
   })
@@ -49,5 +50,11 @@ describe('validateEnv', () => {
       expect(validateEnv({ ...REQUIRED, TRUSTED_PROXY: mode }).TRUSTED_PROXY).toBe(mode)
     }
     expect(() => validateEnv({ ...REQUIRED, TRUSTED_PROXY: 'loopback' })).toThrow('TRUSTED_PROXY')
+  })
+
+  it('accepts only 301 and 302 as REDIRECT_STATUS', () => {
+    expect(validateEnv({ ...REQUIRED, REDIRECT_STATUS: '301' }).REDIRECT_STATUS).toBe(301)
+    expect(validateEnv({ ...REQUIRED, REDIRECT_STATUS: '302' }).REDIRECT_STATUS).toBe(302)
+    expect(() => validateEnv({ ...REQUIRED, REDIRECT_STATUS: '307' })).toThrow('REDIRECT_STATUS')
   })
 })

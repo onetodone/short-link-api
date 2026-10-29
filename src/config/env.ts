@@ -47,6 +47,10 @@ const envSchema = z.object({
   SHORT_URL_BASE: z.string().url().optional(),
   SHORT_CODE_LENGTH: z.coerce.number().int().min(4).max(32).default(7),
   SHORT_CODE_MAX_RETRIES: z.coerce.number().int().min(1).default(5),
+  REDIRECT_STATUS: z
+    .enum(['301', '302'])
+    .default('302')
+    .transform((value) => (value === '301' ? 301 : 302)),
 
   CACHE_TTL_SECONDS: z.coerce.number().int().min(1).default(3600),
   CACHE_NEGATIVE_TTL_SECONDS: z.coerce.number().int().min(1).default(60),
