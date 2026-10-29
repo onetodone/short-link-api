@@ -1,7 +1,7 @@
 # Short Link API
 
 [![CI Status](https://github.com/onetodone/short-link-api/actions/workflows/ci.yml/badge.svg)](https://github.com/onetodone/short-link-api/actions/workflows/ci.yml)
-[![Version](https://img.shields.io/badge/version-1.2.0-blue.svg)](./package.json)
+[![Version](https://img.shields.io/badge/version-1.3.0-blue.svg)](./package.json)
 [![pnpm](https://img.shields.io/badge/pnpm-v12-F69220?logo=pnpm&logoColor=white)](https://pnpm.io/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](./LICENSE)
 
@@ -84,23 +84,24 @@ The service listens on `PORT` (`3000` if unset in `.env`) on `0.0.0.0`.
 `API_PREFIX` (default `api/v1`) applies to every route **except** the public redirect and the ops
 endpoints (`/health`, `/health/ready`, `/metrics`).
 
-| Method & path                    | Auth                                 | Body                                               | Result                                                                                                    |
-| -------------------------------- | ------------------------------------ | -------------------------------------------------- | --------------------------------------------------------------------------------------------------------- |
-| `POST /api/v1/auth/register`     | –                                    | `{ email, password }` (password 8–128)             | `201 { user, accessToken }` + `refresh_token` cookie                                                      |
-| `POST /api/v1/auth/login`        | –                                    | `{ email, password }`                              | `200 { user, accessToken }` + `refresh_token` cookie                                                      |
-| `POST /api/v1/auth/refresh`      | `refresh_token` cookie               | –                                                  | `200 { user, accessToken }` + rotated `refresh_token` cookie                                              |
-| `POST /api/v1/auth/logout`       | Bearer access token                  | –                                                  | `204` — revokes this session · clears the cookie                                                          |
-| `POST /api/v1/auth/logout-all`   | Bearer access token                  | –                                                  | `204` — revokes every session the caller owns                                                             |
-| `GET /api/v1/auth/me`            | Bearer access token                  | –                                                  | `200 { id, email, createdAt }`                                                                            |
-| `POST /api/v1/urls`              | Bearer access token                  | `{ url }` (`http`/`https`, ≤ 2048 chars)           | `201 { shortCode, shortUrl, originalUrl, createdAt, updatedAt }`                                          |
-| `GET /api/v1/urls`               | Bearer access token                  | `?limit` (1–100, def. 20), `?offset` (≥ 0, def. 0) | `200 { items[], total, limit, offset }` — caller's URLs, newest first                                     |
-| `PATCH /api/v1/urls/:shortCode`  | Bearer access token (**owner only**) | `{ url }` (only the destination is mutable)        | `200 { shortCode, shortUrl, originalUrl, clicks, createdAt, updatedAt }` · `404` unknown **or** not owner |
-| `DELETE /api/v1/urls/:shortCode` | Bearer access token (**owner only**) | –                                                  | `204` · `404` unknown **or** not owner                                                                    |
-| `GET /:shortCode`                | –                                    | –                                                  | `302 Location: <originalUrl>` (`301` with `REDIRECT_STATUS=301`) · `404` unknown / malformed              |
-| `GET /health`                    | –                                    | –                                                  | `200 { status: "ok" }` (liveness)                                                                         |
-| `GET /health/ready`              | –                                    | –                                                  | `200 { status, database, redis }` · `503` if a dependency is down                                         |
-| `GET /metrics`                   | –                                    | –                                                  | `200` Prometheus text exposition                                                                          |
-| `GET /api/v1`                    | –                                    | –                                                  | `200 { name, version }`                                                                                   |
+| Method & path                    | Auth                                 | Body                                                        | Result                                                                                                          |
+| -------------------------------- | ------------------------------------ | ----------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------- |
+| `POST /api/v1/auth/register`     | –                                    | `{ email, password }` (password 8–128)                      | `201 { user, accessToken }` + `refresh_token` cookie                                                            |
+| `POST /api/v1/auth/login`        | –                                    | `{ email, password }`                                       | `200 { user, accessToken }` + `refresh_token` cookie                                                            |
+| `POST /api/v1/auth/refresh`      | `refresh_token` cookie               | –                                                           | `200 { user, accessToken }` + rotated `refresh_token` cookie                                                    |
+| `POST /api/v1/auth/logout`       | Bearer access token                  | –                                                           | `204` — revokes this session · clears the cookie                                                                |
+| `POST /api/v1/auth/logout-all`   | Bearer access token                  | –                                                           | `204` — revokes every session the caller owns                                                                   |
+| `GET /api/v1/auth/me`            | Bearer access token                  | –                                                           | `200 { id, email, createdAt }`                                                                                  |
+| `POST /api/v1/urls`              | Bearer access token                  | `{ url, note? }` (`http`/`https`, ≤ 2048 chars; note ≤ 200) | `201 { shortCode, shortUrl, originalUrl, note, createdAt, updatedAt }`                                          |
+| `GET /api/v1/urls`               | Bearer access token                  | `?limit` (1–100, def. 20), `?offset` (≥ 0, def. 0)          | `200 { items[], total, limit, offset }` — caller's URLs, newest first                                           |
+| `GET /api/v1/urls/:shortCode`    | Bearer access token (**owner only**) | –                                                           | `200 { shortCode, shortUrl, originalUrl, note, clicks, createdAt, updatedAt }` · `404` unknown **or** not owner |
+| `PATCH /api/v1/urls/:shortCode`  | Bearer access token (**owner only**) | `{ url?, note? }` (at least one)                            | `200` — same body as `GET` · `404` unknown **or** not owner                                                     |
+| `DELETE /api/v1/urls/:shortCode` | Bearer access token (**owner only**) | –                                                           | `204` · `404` unknown **or** not owner                                                                          |
+| `GET /:shortCode`                | –                                    | –                                                           | `302 Location: <originalUrl>` (`301` with `REDIRECT_STATUS=301`) · `404` unknown / malformed                    |
+| `GET /health`                    | –                                    | –                                                           | `200 { status: "ok" }` (liveness)                                                                               |
+| `GET /health/ready`              | –                                    | –                                                           | `200 { status, database, redis }` · `503` if a dependency is down                                               |
+| `GET /metrics`                   | –                                    | –                                                           | `200` Prometheus text exposition                                                                                |
+| `GET /api/v1`                    | –                                    | –                                                           | `200 { name, version }`                                                                                         |
 
 ### Sessions & token rotation
 
@@ -123,16 +124,21 @@ The submitted URL is normalised (`new URL().href`) before it is stored, so
 fresh short code — there is no uniqueness on `originalUrl`.
 
 `GET /api/v1/urls` returns the authenticated caller's URLs only, newest first, as
-`{ shortCode, shortUrl, originalUrl, clicks, createdAt, updatedAt }`. `total` is the caller's full
+`{ shortCode, shortUrl, originalUrl, note, clicks, createdAt, updatedAt }`. `total` is the caller's full
 count (for paging); `clicks` is the value last flushed from the Redis buffer, so it can trail the
 live count by up to `CLICKS_FLUSH_INTERVAL_MS`.
 
-`PATCH` and `DELETE` act on a single short code and require the caller to own it. A code that the
-caller does not own is indistinguishable from one that does not exist — both return `404`, so the
-API never confirms that a code is registered to another account. `PATCH` changes **only** the destination URL (it
-is re-normalised the same way as on create) and bumps `updatedAt`. Both operations keep Redis
-consistent: the cached destination is evicted on either, and `DELETE` also drops the code's pending
-click buffer so a later flush cannot revive a deleted row.
+`note` is an optional private label of up to 200 characters, trimmed; a blank note is stored as
+`null`.
+
+`GET`, `PATCH` and `DELETE` on `/api/v1/urls/:shortCode` act on a single short code and require the
+caller to own it. A code that the caller does not own is indistinguishable from one that does not
+exist — all return `404`, so the API never confirms that a code is registered to another account.
+`PATCH` takes the destination URL, the note, or both (`note: null` or `""` clears it); the URL is
+re-normalised the same way as on create, and `updatedAt` is bumped. Redis stays consistent: the
+cached destination is evicted when `PATCH` changes the URL (a note-only edit leaves it cached) and on
+`DELETE`, which also drops the code's pending click buffer so a later flush cannot revive a deleted
+row.
 
 ### Click counting
 
@@ -417,7 +423,7 @@ src/
   database/                  PrismaService (pg adapter, slow-query event log) + @Global module
   redis/                     tuned ioredis client + @Global module + InjectRedis()
   modules/
-    urls/                    create + list + update + delete + resolve, short-code CSPRNG, click buffer, redirect controller + bot/prefetch click filter
+    urls/                    create + list + get + update + delete + resolve, short-code CSPRNG, click buffer, redirect controller + bot/prefetch click filter
     auth/                    bcrypt, access-JWT issue/verify, rotating refresh sessions + reuse detection, logout, hourly sweep
     health/                  liveness + readiness
     metrics/                 in-memory counters + Prometheus endpoint

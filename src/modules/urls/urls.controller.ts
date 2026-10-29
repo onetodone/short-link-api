@@ -36,7 +36,12 @@ export class UrlsController {
   @Post()
   @HttpCode(HttpStatus.CREATED)
   create(@Body() dto: CreateUrlDto, @CurrentUser('id') userId: string): Promise<CreatedUrl> {
-    return this.urls.create(dto.url, userId)
+    return this.urls.create(dto, userId)
+  }
+
+  @Get(':shortCode')
+  findOne(@Param('shortCode') shortCode: string, @CurrentUser('id') userId: string): Promise<UrlSummary> {
+    return this.urls.findForUser(userId, this.requireShortCode(shortCode))
   }
 
   @Patch(':shortCode')
@@ -45,7 +50,7 @@ export class UrlsController {
     @Body() dto: UpdateUrlDto,
     @CurrentUser('id') userId: string,
   ): Promise<UrlSummary> {
-    return this.urls.updateForUser(userId, this.requireShortCode(shortCode), dto.url)
+    return this.urls.updateForUser(userId, this.requireShortCode(shortCode), dto)
   }
 
   @Delete(':shortCode')

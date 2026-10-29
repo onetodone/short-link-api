@@ -6,7 +6,7 @@ import { PrismaService } from '@/database/prisma.service'
 import { MetricsService } from '@/modules/metrics/metrics.service'
 import { InjectRedis } from '@/redis/redis.constants'
 import { ClicksService } from '@/modules/urls/clicks.service'
-import { CreatedUrl, ListUrlsOptions, UrlList, UrlSummary } from '@/modules/urls/urls.types'
+import { CreatedUrl, ListUrlsOptions, NewUrl, UrlChanges, UrlList, UrlSummary } from '@/modules/urls/urls.types'
 import { generateShortCode } from '@/modules/urls/short-code.util'
 import { Prisma } from '@prisma-client'
 
@@ -17,6 +17,7 @@ const LOCK_WAIT_INTERVAL_MS = 40
 const URL_SUMMARY_SELECT = {
   shortCode: true,
   originalUrl: true,
+  note: true,
   clicks: true,
   createdAt: true,
   updatedAt: true,
@@ -54,14 +55,14 @@ export class UrlsService {
     this.lockTtlMs = config.get<number>('cache.lockTtlMs', 3000)
   }
 
-  async create(originalUrl: string, userId: string | null): Promise<CreatedUrl> {
+  async create({ url: originalUrl, note = null }: NewUrl, userId: string | null): Promise<CreatedUrl> {
     for (let attempt = 1; attempt <= this.maxRetries; attempt += 1) {
       const shortCode = await generateShortCode(this.codeLength)
 
       try {
         const record = await this.prisma.url.create({
-          data: { originalUrl, shortCode, userId },
-          select: { shortCode: true, originalUrl: true, createdAt: true, updatedAt: true },
+          data: { originalUrl, note, shortCode, userId },
+          select: { shortCode: true, originalUrl: true, note: true, createdAt: true, updatedAt: true },
         })
 
         this.metrics.increment('urls_created_total')
@@ -70,6 +71,7 @@ export class UrlsService {
           shortCode: record.shortCode,
           shortUrl: `${this.baseUrl}/${record.shortCode}`,
           originalUrl: record.originalUrl,
+          note: record.note,
           createdAt: record.createdAt,
           updatedAt: record.updatedAt,
         }
@@ -110,15 +112,28 @@ export class UrlsService {
     }
   }
 
-  async updateForUser(userId: string, shortCode: string, originalUrl: string): Promise<UrlSummary> {
+  async findForUser(userId: string, shortCode: string): Promise<UrlSummary> {
+    const record = await this.prisma.url.findUnique({
+      where: { shortCode, userId },
+      select: URL_SUMMARY_SELECT,
+    })
+    if (!record) {
+      throw new NotFoundException('Short code not found')
+    }
+    return this.toSummary(record)
+  }
+
+  async updateForUser(userId: string, shortCode: string, changes: UrlChanges): Promise<UrlSummary> {
     try {
       const record = await this.prisma.url.update({
         where: { shortCode, userId },
-        data: { originalUrl },
+        data: { originalUrl: changes.url, note: changes.note },
         select: URL_SUMMARY_SELECT,
       })
 
-      await this.evictFromCache(shortCode)
+      if (changes.url !== undefined) {
+        await this.evictFromCache(shortCode)
+      }
 
       return this.toSummary(record)
     } catch (error) {
@@ -145,6 +160,7 @@ export class UrlsService {
       shortCode: row.shortCode,
       shortUrl: `${this.baseUrl}/${row.shortCode}`,
       originalUrl: row.originalUrl,
+      note: row.note,
       clicks: row.clicks,
       createdAt: row.createdAt,
       updatedAt: row.updatedAt,
