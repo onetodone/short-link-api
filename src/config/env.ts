@@ -52,8 +52,6 @@ const envSchema = z.object({
   CACHE_NEGATIVE_TTL_SECONDS: z.coerce.number().int().min(1).default(60),
   CACHE_LOCK_TTL_MS: z.coerce.number().int().min(1).default(3000),
   CLICKS_FLUSH_INTERVAL_MS: z.coerce.number().int().min(100).default(5000),
-
-  npm_package_version: z.string().default('0.0.0'),
 })
 
 type EnvVars = z.infer<typeof envSchema>

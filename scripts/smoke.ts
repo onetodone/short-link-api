@@ -2,8 +2,9 @@
  * End-to-end smoke test for CI (and a handy local pre-push check).
  *
  * Assumes the app is already listening on BASE_URL. Walks the critical path:
- * liveness, readiness (Postgres + Redis), register, the guarded create endpoint,
- * the redirect (cache miss then hit), an unknown-code 404, the Prometheus
+ * liveness, readiness (Postgres + Redis), the reported version, register, the
+ * guarded create endpoint, the redirect (cache miss then hit), an unknown-code
+ * 404, the Prometheus
  * /metrics counters, and the refresh-session lifecycle (rotate, a racing tab
  * converges, logout revokes). Exits non-zero on the first failed check.
  *
@@ -79,6 +80,17 @@ async function main(): Promise<void> {
     assert(res.status === 200, `GET /health/ready -> 200 (got ${res.status})`, body)
     assert(body.database === 'up', `readiness: database up (got ${String(body.database)})`)
     assert(body.redis === 'up', `readiness: redis up (got ${String(body.redis)})`)
+  }
+
+  // API info — the version comes from package.json however the app is started.
+  {
+    const res = await fetch(`${BASE_URL}/${API_PREFIX}`)
+    const body = (await res.json().catch(() => ({}))) as { version?: unknown }
+    const expected = process.env.npm_package_version
+    assert(
+      expected ? body.version === expected : typeof body.version === 'string' && body.version !== '0.0.0',
+      `GET /${API_PREFIX} reports version ${expected ?? '(any)'} (got ${String(body.version)})`,
+    )
   }
 
   // Register a throwaway account and capture an access token.
