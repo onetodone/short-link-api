@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -eo pipefail
 
-# Инициализируем nvm для подтягивания node и pnpm в контексте SSH-сессии
+# Load nvm so node and pnpm are available in the non-interactive SSH session
 export NVM_DIR="$HOME/.nvm"
 [ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh"
 
