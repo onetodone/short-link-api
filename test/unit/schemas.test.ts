@@ -4,6 +4,7 @@ import { loginSchema } from '@/modules/auth/dto/login.dto'
 import { registerSchema } from '@/modules/auth/dto/register.dto'
 import { createUrlSchema } from '@/modules/urls/dto/create-url.dto'
 import { listUrlsSchema } from '@/modules/urls/dto/list-urls.dto'
+import { updateUrlSchema } from '@/modules/urls/dto/update-url.dto'
 
 describe('createUrlSchema', () => {
   it('normalises the URL', () => {
@@ -16,6 +17,29 @@ describe('createUrlSchema', () => {
       expect(createUrlSchema.safeParse({ url }).success).toBe(false)
     },
   )
+
+  it('trims the note and treats a blank one as none', () => {
+    expect(createUrlSchema.parse({ url: 'https://e.com', note: '  launch  ' }).note).toBe('launch')
+    expect(createUrlSchema.parse({ url: 'https://e.com', note: '   ' }).note).toBeNull()
+    expect(createUrlSchema.parse({ url: 'https://e.com' }).note).toBeUndefined()
+  })
+
+  it.each(['x'.repeat(201), 42])('rejects the note %#', (note) => {
+    expect(createUrlSchema.safeParse({ url: 'https://e.com', note }).success).toBe(false)
+  })
+})
+
+describe('updateUrlSchema', () => {
+  it('accepts the URL, the note or both', () => {
+    expect(updateUrlSchema.parse({ url: 'https://e.com' })).toEqual({ url: 'https://e.com/' })
+    expect(updateUrlSchema.parse({ note: 'x' })).toEqual({ note: 'x' })
+    expect(updateUrlSchema.parse({ note: null })).toEqual({ note: null })
+    expect(updateUrlSchema.parse({ url: 'https://e.com', note: '' })).toEqual({ url: 'https://e.com/', note: null })
+  })
+
+  it('requires at least one field', () => {
+    expect(updateUrlSchema.safeParse({}).success).toBe(false)
+  })
 })
 
 describe('registerSchema', () => {

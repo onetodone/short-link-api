@@ -148,9 +148,13 @@ async function main(): Promise<void> {
   const createRes = await fetch(apiUrl('urls'), {
     method: 'POST',
     headers: { 'content-type': 'application/json', authorization: `Bearer ${accessToken}` },
-    body: JSON.stringify({ url: target }),
+    body: JSON.stringify({ url: target, note: 'smoke' }),
   })
-  const createBody = (await createRes.json().catch(() => ({}))) as { shortCode?: unknown; originalUrl?: unknown }
+  const createBody = (await createRes.json().catch(() => ({}))) as {
+    shortCode?: unknown
+    originalUrl?: unknown
+    note?: unknown
+  }
   assert(createRes.status === 201, `POST /${API_PREFIX}/urls -> 201 (got ${createRes.status})`, createBody)
   assert(
     typeof createBody.shortCode === 'string' && createBody.shortCode.length > 0,
@@ -158,7 +162,28 @@ async function main(): Promise<void> {
     createBody,
   )
   assert(createBody.originalUrl === target, 'create echoed the normalised originalUrl', createBody)
+  assert(createBody.note === 'smoke', 'create echoed the note', createBody)
   const shortCode = createBody.shortCode as string
+
+  // Edit the note only, then load the single link.
+  {
+    const res = await fetch(apiUrl(`urls/${shortCode}`), {
+      method: 'PATCH',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${accessToken}` },
+      body: JSON.stringify({ note: 'smoke edited' }),
+    })
+    assert(res.status === 200, `PATCH /${API_PREFIX}/urls/${shortCode} (note only) -> 200 (got ${res.status})`)
+  }
+  {
+    const res = await fetch(apiUrl(`urls/${shortCode}`), { headers: { authorization: `Bearer ${accessToken}` } })
+    const body = (await res.json().catch(() => ({}))) as { originalUrl?: unknown; note?: unknown }
+    assert(res.status === 200, `GET /${API_PREFIX}/urls/${shortCode} -> 200 (got ${res.status})`, body)
+    assert(
+      body.originalUrl === target && body.note === 'smoke edited',
+      'single link carries the edited note and the original destination',
+      body,
+    )
+  }
 
   // A link-preview bot is redirected, but its hit is not counted as a click.
   const botRedirectsBefore = await readMetric('http_redirects_bot_total')
