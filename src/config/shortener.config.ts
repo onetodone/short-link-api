@@ -7,4 +7,5 @@ export const shortenerConfig = registerAs('shortener', () => ({
   codeLength: env.SHORT_CODE_LENGTH,
   maxRetries: env.SHORT_CODE_MAX_RETRIES,
   redirectStatus: env.REDIRECT_STATUS,
+  createDailyLimit: env.URL_CREATE_DAILY_LIMIT,
 }))

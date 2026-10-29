@@ -3,7 +3,7 @@
  *
  * Assumes the app is already listening on BASE_URL. Walks the critical path:
  * liveness, readiness (Postgres + Redis), the reported version, register, the
- * guarded create endpoint, the redirect (cache miss then hit), a bot that is
+ * guarded create endpoint, a refused destination, the redirect (cache miss then hit), a bot that is
  * redirected but not counted as a click, an unknown-code 404, the Prometheus
  * /metrics counters, and the refresh-session lifecycle (rotate, a racing tab
  * converges, logout revokes). Exits non-zero on the first failed check.
@@ -164,6 +164,22 @@ async function main(): Promise<void> {
   assert(createBody.originalUrl === target, 'create echoed the normalised originalUrl', createBody)
   assert(createBody.note === 'smoke', 'create echoed the note', createBody)
   const shortCode = createBody.shortCode as string
+
+  // A destination on a URL shortener is refused with a machine-readable code.
+  {
+    const res = await fetch(apiUrl('urls'), {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${accessToken}` },
+      body: JSON.stringify({ url: 'https://bit.ly/smoke' }),
+    })
+    const body = (await res.json().catch(() => ({}))) as { code?: unknown; reason?: unknown }
+    assert(res.status === 422, `POST /${API_PREFIX}/urls (shortener) -> 422 (got ${res.status})`, body)
+    assert(
+      body.code === 'DESTINATION_REJECTED' && body.reason === 'URL_SHORTENER',
+      'refused destination carries code DESTINATION_REJECTED and reason URL_SHORTENER',
+      body,
+    )
+  }
 
   // Edit the note only, then load the single link.
   {
