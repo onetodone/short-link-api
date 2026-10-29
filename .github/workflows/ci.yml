@@ -42,11 +42,67 @@ jobs:
       - name: Generate Prisma client
         run: pnpm exec prisma generate
 
+      - run: pnpm format:check
+
       - run: pnpm lint:ci
 
       - run: pnpm typecheck
 
       - run: pnpm build
+
+  test:
+    name: Unit · Integration tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    needs: quality
+
+    services:
+      postgres:
+        image: postgres:18-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: short_url_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+
+      redis:
+        image: redis:8-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+
+    # Everything else the tests need is set in vitest.config.mts.
+    env:
+      TEST_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/short_url_test?schema=public
+      REDIS_HOST: localhost
+      REDIS_PORT: '6379'
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: pnpm/action-setup@v6
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      - name: Generate Prisma client
+        run: pnpm exec prisma generate
+
+      - run: pnpm test
 
   e2e:
     name: Migrate · Smoke test
