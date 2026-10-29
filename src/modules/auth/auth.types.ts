@@ -1,10 +1,17 @@
 export interface AuthUser {
   id: string
   email: string
+  emailVerified: boolean
 }
 
-export interface AuthPrincipal extends AuthUser {
+export interface AuthPrincipal {
+  id: string
+  email: string
   sessionId: string
+}
+
+export interface AuthProfile extends AuthUser {
+  createdAt: Date
 }
 
 export interface AuthTokens {

@@ -2,6 +2,7 @@ import { Injectable, Logger, OnModuleDestroy, OnModuleInit } from '@nestjs/commo
 import { ConfigService } from '@nestjs/config'
 
 import { PrismaService } from '@/database/prisma.service'
+import { VerificationService } from '@/modules/auth/verification.service'
 
 @Injectable()
 export class SessionCleanupService implements OnModuleInit, OnModuleDestroy {
@@ -13,6 +14,7 @@ export class SessionCleanupService implements OnModuleInit, OnModuleDestroy {
 
   constructor(
     private readonly prisma: PrismaService,
+    private readonly verification: VerificationService,
     config: ConfigService,
   ) {
     this.intervalMs = config.get<number>('auth.sessionCleanupIntervalMs', 3_600_000)
@@ -42,8 +44,9 @@ export class SessionCleanupService implements OnModuleInit, OnModuleDestroy {
       const { count } = await this.prisma.session.deleteMany({
         where: { expiresAt: { lt: new Date() } },
       })
-      if (count > 0) {
-        this.logger.debug(`Swept ${count} expired session(s)`)
+      const tokens = await this.verification.sweepExpired()
+      if (count > 0 || tokens > 0) {
+        this.logger.debug(`Swept ${count} expired session(s) and ${tokens} expired email token(s)`)
       }
     } catch (error) {
       this.logger.warn(`Session sweep failed: ${(error as Error).message}`)

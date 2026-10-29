@@ -10,12 +10,14 @@ import { authConfig } from '@/config/auth.config'
 import { cacheConfig } from '@/config/cache.config'
 import { databaseConfig } from '@/config/database.config'
 import { jwtConfig } from '@/config/jwt.config'
+import { mailConfig } from '@/config/mail.config'
 import { redisConfig } from '@/config/redis.config'
 import { shortenerConfig } from '@/config/shortener.config'
 import { validateEnv } from '@/config/env'
 import { loggerOptions } from '@/common/logging/pino.config'
 import { clientIp } from '@/common/trusted-proxy'
 import { PrismaModule } from '@/database/prisma.module'
+import { MailModule } from '@/mail/mail.module'
 import { RedisModule } from '@/redis/redis.module'
 import { AuthModule } from '@/modules/auth/auth.module'
 import { HealthModule } from '@/modules/health/health.module'
@@ -29,7 +31,7 @@ import { AppController } from '@/app.controller'
       isGlobal: true,
       cache: true,
       validate: validateEnv,
-      load: [appConfig, authConfig, databaseConfig, redisConfig, jwtConfig, cacheConfig, shortenerConfig],
+      load: [appConfig, authConfig, databaseConfig, redisConfig, jwtConfig, cacheConfig, shortenerConfig, mailConfig],
     }),
     LoggerModule.forRoot(loggerOptions),
     ThrottlerModule.forRootAsync({
@@ -47,6 +49,7 @@ import { AppController } from '@/app.controller'
     }),
     PrismaModule,
     RedisModule,
+    MailModule,
     MetricsModule,
     AuthModule,
     HealthModule,

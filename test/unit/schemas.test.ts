@@ -1,7 +1,10 @@
 import { describe, expect, it } from 'vitest'
 
+import { forgotPasswordSchema } from '@/modules/auth/dto/forgot-password.dto'
 import { loginSchema } from '@/modules/auth/dto/login.dto'
 import { registerSchema } from '@/modules/auth/dto/register.dto'
+import { resetPasswordSchema } from '@/modules/auth/dto/reset-password.dto'
+import { verifyEmailSchema } from '@/modules/auth/dto/verify-email.dto'
 import { createUrlSchema } from '@/modules/urls/dto/create-url.dto'
 import { listUrlsSchema } from '@/modules/urls/dto/list-urls.dto'
 import { updateUrlSchema } from '@/modules/urls/dto/update-url.dto'
@@ -73,5 +76,23 @@ describe('listUrlsSchema', () => {
 
   it.each([{ limit: '0' }, { limit: '101' }, { offset: '-1' }, { limit: '1.5' }])('rejects %o', (query) => {
     expect(listUrlsSchema.safeParse(query).success).toBe(false)
+  })
+})
+
+describe('account email schemas', () => {
+  it('normalises the email of a reset request', () => {
+    expect(forgotPasswordSchema.parse({ email: ' A@B.CO ' })).toEqual({ email: 'a@b.co' })
+  })
+
+  it('requires a token of sane length', () => {
+    expect(verifyEmailSchema.safeParse({ token: 'abc' }).success).toBe(true)
+    expect(verifyEmailSchema.safeParse({ token: '' }).success).toBe(false)
+    expect(verifyEmailSchema.safeParse({ token: 'x'.repeat(257) }).success).toBe(false)
+  })
+
+  it('holds a reset password to the registration rules', () => {
+    expect(resetPasswordSchema.safeParse({ token: 'abc', password: 'password1' }).success).toBe(true)
+    expect(resetPasswordSchema.safeParse({ token: 'abc', password: 'short' }).success).toBe(false)
+    expect(resetPasswordSchema.safeParse({ token: 'abc', password: 'x'.repeat(129) }).success).toBe(false)
   })
 })

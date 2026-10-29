@@ -4,60 +4,86 @@ import { z } from 'zod'
 
 const LOG_LEVELS = ['trace', 'debug', 'info', 'warn', 'error', 'fatal'] as const
 
-const envSchema = z.object({
-  NODE_ENV: z.enum(['development', 'production', 'test']).default('production'),
-  PORT: z.coerce.number().int().min(1).default(3000),
-  API_PREFIX: z
-    .string()
-    .default('api/v1')
-    .transform((value) => value.replace(/^\/+|\/+$/g, '')),
+const optionalString = z
+  .string()
+  .optional()
+  .transform((value) => value || undefined)
 
-  CORS_ORIGIN: z.string().min(1),
-  COOKIE_SECRET: z.string().optional(),
-  TRUSTED_PROXY: z.enum(['private', 'all', 'none']).default('private'),
-  FRONT_PROXY_SECRET: z
-    .string()
-    .optional()
-    .transform((value) => value || undefined)
-    .pipe(z.string().min(32, 'FRONT_PROXY_SECRET must be at least 32 characters').optional()),
+const optionalBoolean = z
+  .enum(['true', 'false', '1', '0', ''])
+  .optional()
+  .transform((value) => (value ? value === 'true' || value === '1' : undefined))
 
-  DATABASE_URL: z.string().min(1),
+const envSchema = z
+  .object({
+    NODE_ENV: z.enum(['development', 'production', 'test']).default('production'),
+    PORT: z.coerce.number().int().min(1).default(3000),
+    API_PREFIX: z
+      .string()
+      .default('api/v1')
+      .transform((value) => value.replace(/^\/+|\/+$/g, '')),
 
-  REDIS_HOST: z.string().min(1).default('localhost'),
-  REDIS_PORT: z.coerce.number().int().min(1).default(6379),
-  REDIS_PASSWORD: z.string().optional(),
-  REDIS_KEY_PREFIX: z.string().default('shortlink:'),
-  REDIS_TLS: z
-    .enum(['true', 'false'])
-    .default('false')
-    .transform((value) => value === 'true'),
+    CORS_ORIGIN: z.string().min(1),
+    COOKIE_SECRET: z.string().optional(),
+    TRUSTED_PROXY: z.enum(['private', 'all', 'none']).default('private'),
+    FRONT_PROXY_SECRET: z
+      .string()
+      .optional()
+      .transform((value) => value || undefined)
+      .pipe(z.string().min(32, 'FRONT_PROXY_SECRET must be at least 32 characters').optional()),
 
-  LOG_LEVEL: z.enum(LOG_LEVELS).optional(),
-  SLOW_QUERY_THRESHOLD_MS: z.coerce.number().int().min(0).default(200),
+    DATABASE_URL: z.string().min(1),
 
-  THROTTLE_TTL: z.coerce.number().int().min(1).default(60_000),
-  THROTTLE_LIMIT: z.coerce.number().int().min(1).default(100),
+    REDIS_HOST: z.string().min(1).default('localhost'),
+    REDIS_PORT: z.coerce.number().int().min(1).default(6379),
+    REDIS_PASSWORD: z.string().optional(),
+    REDIS_KEY_PREFIX: z.string().default('shortlink:'),
+    REDIS_TLS: z
+      .enum(['true', 'false'])
+      .default('false')
+      .transform((value) => value === 'true'),
 
-  JWT_SECRET: z.string().min(16, 'JWT_SECRET must be at least 16 characters'),
-  JWT_EXPIRES_IN: z.string().min(1).default('15m'),
-  JWT_REFRESH_EXPIRES_IN: z.string().min(1).default('7d'),
+    LOG_LEVEL: z.enum(LOG_LEVELS).optional(),
+    SLOW_QUERY_THRESHOLD_MS: z.coerce.number().int().min(0).default(200),
 
-  SESSION_CLEANUP_INTERVAL_MS: z.coerce.number().int().min(60_000).default(3_600_000),
+    THROTTLE_TTL: z.coerce.number().int().min(1).default(60_000),
+    THROTTLE_LIMIT: z.coerce.number().int().min(1).default(100),
 
-  SHORT_URL_BASE: z.string().url().optional(),
-  SHORT_CODE_LENGTH: z.coerce.number().int().min(4).max(32).default(7),
-  SHORT_CODE_MAX_RETRIES: z.coerce.number().int().min(1).default(5),
-  REDIRECT_STATUS: z
-    .enum(['301', '302'])
-    .default('302')
-    .transform((value) => (value === '301' ? 301 : 302)),
-  URL_CREATE_DAILY_LIMIT: z.coerce.number().int().min(0).default(10),
+    JWT_SECRET: z.string().min(16, 'JWT_SECRET must be at least 16 characters'),
+    JWT_EXPIRES_IN: z.string().min(1).default('15m'),
+    JWT_REFRESH_EXPIRES_IN: z.string().min(1).default('7d'),
 
-  CACHE_TTL_SECONDS: z.coerce.number().int().min(1).default(3600),
-  CACHE_NEGATIVE_TTL_SECONDS: z.coerce.number().int().min(1).default(60),
-  CACHE_LOCK_TTL_MS: z.coerce.number().int().min(1).default(3000),
-  CLICKS_FLUSH_INTERVAL_MS: z.coerce.number().int().min(100).default(5000),
-})
+    SESSION_CLEANUP_INTERVAL_MS: z.coerce.number().int().min(60_000).default(3_600_000),
+
+    SHORT_URL_BASE: z.string().url().optional(),
+    SHORT_CODE_LENGTH: z.coerce.number().int().min(4).max(32).default(7),
+    SHORT_CODE_MAX_RETRIES: z.coerce.number().int().min(1).default(5),
+    REDIRECT_STATUS: z
+      .enum(['301', '302'])
+      .default('302')
+      .transform((value) => (value === '301' ? 301 : 302)),
+    URL_CREATE_DAILY_LIMIT: z.coerce.number().int().min(0).default(10),
+
+    APP_URL: z.url({ protocol: /^https?$/ }).transform((value) => value.replace(/\/+$/, '')),
+    SUPPORT_EMAIL: z.email(),
+    SMTP_HOST: z.string().min(1),
+    SMTP_PORT: z.coerce.number().int().min(1).max(65_535),
+    SMTP_USER: optionalString,
+    SMTP_PASS: optionalString,
+    SMTP_SECURE: optionalBoolean,
+    SMTP_REQUIRE_TLS: optionalBoolean,
+    SMTP_FROM_EMAIL: optionalString.pipe(z.email().optional()),
+    SMTP_FROM_NAME: optionalString,
+
+    CACHE_TTL_SECONDS: z.coerce.number().int().min(1).default(3600),
+    CACHE_NEGATIVE_TTL_SECONDS: z.coerce.number().int().min(1).default(60),
+    CACHE_LOCK_TTL_MS: z.coerce.number().int().min(1).default(3000),
+    CLICKS_FLUSH_INTERVAL_MS: z.coerce.number().int().min(100).default(5000),
+  })
+  .refine((value) => value.SMTP_FROM_EMAIL ?? value.SMTP_USER, {
+    path: ['SMTP_FROM_EMAIL'],
+    message: 'SMTP_FROM_EMAIL or SMTP_USER must be set',
+  })
 
 type EnvVars = z.infer<typeof envSchema>
 

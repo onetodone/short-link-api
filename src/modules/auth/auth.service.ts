@@ -7,10 +7,10 @@ import { parseDurationSeconds } from '@/common/duration.util'
 import { hashSessionSecret, verifySessionSecret } from '@/common/session-hash.util'
 import { encodeSessionToken, generateSessionSecret, parseSessionToken } from '@/common/session-token.util'
 import { PrismaService } from '@/database/prisma.service'
-import type { AuthResult, AuthUser, RequestContext } from '@/modules/auth/auth.types'
+import { BCRYPT_COST, toAuthUser, USER_SELECT } from '@/modules/auth/auth-user'
+import type { AuthProfile, AuthResult, AuthUser, RequestContext } from '@/modules/auth/auth.types'
+import { VerificationService } from '@/modules/auth/verification.service'
 import { Prisma } from '@prisma-client'
-
-const BCRYPT_COST = 12
 
 // A valid pre-computed hash compared against when the account does not exist, so a
 // failed login costs roughly the same time whether or not the email is registered.
@@ -21,7 +21,7 @@ const ROTATION_GRACE_MS = 30_000
 const REFRESH_REJECTED = 'Invalid or expired refresh token'
 
 const SESSION_INCLUDE = {
-  user: { select: { id: true, email: true } },
+  user: { select: USER_SELECT },
 } satisfies Prisma.SessionInclude
 
 type SessionWithUser = Prisma.SessionGetPayload<{ include: typeof SESSION_INCLUDE }>
@@ -38,6 +38,7 @@ export class AuthService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly jwt: JwtService,
+    private readonly verification: VerificationService,
     config: ConfigService,
   ) {
     this.accessTtl = config.get<string>('jwt.expiresIn', '15m') as JwtSignOptions['expiresIn']
@@ -50,25 +51,30 @@ export class AuthService {
   async register(email: string, password: string, ctx: RequestContext): Promise<AuthResult> {
     const passwordHash = await bcrypt.hash(password, BCRYPT_COST)
 
+    let user: AuthUser
     try {
-      const user = await this.prisma.user.create({
-        data: { email, passwordHash },
-        select: { id: true, email: true },
-      })
-      this.logger.log(`Registered new user <${user.email}>`)
-      return this.issueTokens(user, ctx)
+      user = toAuthUser(await this.prisma.user.create({ data: { email, passwordHash }, select: USER_SELECT }))
     } catch (error) {
       if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002') {
         throw new ConflictException('Email is already registered')
       }
       throw error
     }
+
+    this.logger.log(`Registered new user <${user.email}>`)
+    const result = await this.issueTokens(user, ctx)
+    try {
+      await this.verification.sendVerification(user)
+    } catch (error) {
+      this.logger.error(`Verification email for user ${user.id} not queued: ${(error as Error).message}`)
+    }
+    return result
   }
 
   async login(email: string, password: string, ctx: RequestContext): Promise<AuthResult> {
     const user = await this.prisma.user.findUnique({
       where: { email },
-      select: { id: true, email: true, passwordHash: true },
+      select: { ...USER_SELECT, passwordHash: true },
     })
 
     const matches = await bcrypt.compare(password, user?.passwordHash ?? TIMING_GUARD_HASH)
@@ -77,7 +83,7 @@ export class AuthService {
       throw new UnauthorizedException('Invalid email or password')
     }
 
-    return this.issueTokens({ id: user.id, email: user.email }, ctx)
+    return this.issueTokens(toAuthUser(user), ctx)
   }
 
   async refresh(rawToken: string, ctx: RequestContext): Promise<AuthResult> {
@@ -139,17 +145,17 @@ export class AuthService {
     this.logger.log(`All sessions terminated for user ${userId} (${count})`)
   }
 
-  async profile(userId: string): Promise<{ id: string; email: string; createdAt: Date }> {
+  async profile(userId: string): Promise<AuthProfile> {
     const user = await this.prisma.user.findUnique({
       where: { id: userId },
-      select: { id: true, email: true, createdAt: true },
+      select: { ...USER_SELECT, createdAt: true },
     })
 
     if (!user) {
       throw new UnauthorizedException('Account no longer exists')
     }
 
-    return user
+    return { ...toAuthUser(user), createdAt: user.createdAt }
   }
 
   private async issueTokens(user: AuthUser, ctx: RequestContext): Promise<AuthResult> {
@@ -197,14 +203,13 @@ export class AuthService {
 
     this.rememberRotation(session.id, secret, now)
 
-    const accessToken = await this.signAccessToken(session.user, session.id)
-
-    return { user: session.user, accessToken, refreshToken: encodeSessionToken(session.id, secret) }
+    return this.reissue(session, secret)
   }
 
   private async reissue(session: SessionWithUser, secret: string): Promise<AuthResult> {
-    const accessToken = await this.signAccessToken(session.user, session.id)
-    return { user: session.user, accessToken, refreshToken: encodeSessionToken(session.id, secret) }
+    const user = toAuthUser(session.user)
+    const accessToken = await this.signAccessToken(user, session.id)
+    return { user, accessToken, refreshToken: encodeSessionToken(session.id, secret) }
   }
 
   private rememberRotation(sessionId: string, secret: string, now: number): void {

@@ -6,6 +6,11 @@ const REQUIRED = {
   CORS_ORIGIN: '*',
   DATABASE_URL: 'postgresql://localhost/db',
   JWT_SECRET: 'sixteen-chars-ok',
+  APP_URL: 'https://app.example.com',
+  SUPPORT_EMAIL: 'support@example.com',
+  SMTP_HOST: 'smtp.example.com',
+  SMTP_PORT: '587',
+  SMTP_FROM_EMAIL: 'noreply@example.com',
 }
 
 describe('validateEnv', () => {
@@ -31,10 +36,13 @@ describe('validateEnv', () => {
     expect(env.API_PREFIX).toBe('api/v2')
   })
 
-  it.each(['CORS_ORIGIN', 'DATABASE_URL', 'JWT_SECRET'] as const)('requires %s', (key) => {
-    const { [key]: _omitted, ...rest } = REQUIRED
-    expect(() => validateEnv(rest)).toThrow(key)
-  })
+  it.each(['CORS_ORIGIN', 'DATABASE_URL', 'JWT_SECRET', 'APP_URL', 'SUPPORT_EMAIL', 'SMTP_HOST', 'SMTP_PORT'] as const)(
+    'requires %s',
+    (key) => {
+      const { [key]: _omitted, ...rest } = REQUIRED
+      expect(() => validateEnv(rest)).toThrow(key)
+    },
+  )
 
   it('rejects a short JWT secret', () => {
     expect(() => validateEnv({ ...REQUIRED, JWT_SECRET: 'short' })).toThrow('at least 16 characters')
@@ -57,5 +65,26 @@ describe('validateEnv', () => {
     expect(validateEnv({ ...REQUIRED, REDIRECT_STATUS: '301' }).REDIRECT_STATUS).toBe(301)
     expect(validateEnv({ ...REQUIRED, REDIRECT_STATUS: '302' }).REDIRECT_STATUS).toBe(302)
     expect(() => validateEnv({ ...REQUIRED, REDIRECT_STATUS: '307' })).toThrow('REDIRECT_STATUS')
+  })
+
+  it('takes the sender from SMTP_FROM_EMAIL or SMTP_USER and requires one of them', () => {
+    const { SMTP_FROM_EMAIL: _omitted, ...rest } = REQUIRED
+    expect(validateEnv({ ...rest, SMTP_USER: 'mailer@example.com' }).SMTP_USER).toBe('mailer@example.com')
+    expect(() => validateEnv(rest)).toThrow('SMTP_FROM_EMAIL or SMTP_USER must be set')
+    expect(() => validateEnv({ ...REQUIRED, SMTP_FROM_EMAIL: 'not-an-email' })).toThrow('SMTP_FROM_EMAIL')
+  })
+
+  it('reads SMTP_SECURE and SMTP_REQUIRE_TLS as true, false or unset', () => {
+    expect(validateEnv({ ...REQUIRED, SMTP_SECURE: '1', SMTP_REQUIRE_TLS: 'false' })).toMatchObject({
+      SMTP_SECURE: true,
+      SMTP_REQUIRE_TLS: false,
+    })
+    expect(validateEnv({ ...REQUIRED, SMTP_SECURE: '' }).SMTP_SECURE).toBeUndefined()
+    expect(() => validateEnv({ ...REQUIRED, SMTP_SECURE: 'yes' })).toThrow('SMTP_SECURE')
+  })
+
+  it('accepts only an http(s) APP_URL and drops its trailing slash', () => {
+    expect(validateEnv({ ...REQUIRED, APP_URL: 'https://app.example.com/' }).APP_URL).toBe('https://app.example.com')
+    expect(() => validateEnv({ ...REQUIRED, APP_URL: 'ftp://app.example.com' })).toThrow('APP_URL')
   })
 })

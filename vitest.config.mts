@@ -27,6 +27,11 @@ const sharedEnv = {
   JWT_REFRESH_EXPIRES_IN: '7d',
   TRUSTED_PROXY: 'private',
   SHORT_URL_BASE: 'http://sho.rt',
+  APP_URL: 'http://app.test',
+  SUPPORT_EMAIL: 'support@example.com',
+  SMTP_HOST: 'localhost',
+  SMTP_PORT: '1025',
+  SMTP_FROM_EMAIL: 'noreply@example.com',
 }
 
 const resolve = {

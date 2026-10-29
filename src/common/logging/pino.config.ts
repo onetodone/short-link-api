@@ -23,6 +23,7 @@ export const loggerOptions: Params = {
         '*.password',
         '*.passwordHash',
         '*.token',
+        '*.newEmail',
         '*.accessToken',
         '*.refreshToken',
         '*.jwt',

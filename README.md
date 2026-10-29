@@ -1,7 +1,7 @@
 # Short Link API
 
 [![CI Status](https://github.com/onetodone/short-link-api/actions/workflows/ci.yml/badge.svg)](https://github.com/onetodone/short-link-api/actions/workflows/ci.yml)
-[![Version](https://img.shields.io/badge/version-1.4.0-blue.svg)](./package.json)
+[![Version](https://img.shields.io/badge/version-1.5.0-blue.svg)](./package.json)
 [![pnpm](https://img.shields.io/badge/pnpm-v12-F69220?logo=pnpm&logoColor=white)](https://pnpm.io/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](./LICENSE)
 
@@ -21,6 +21,7 @@ a database write.
 - **Cache / buffer:** Redis via `ioredis`
 - **Validation:** `zod` DTOs through `nestjs-zod`
 - **Auth:** stateless access JWT + Postgres-backed rotating refresh sessions (revocable, reuse-detecting), custom guard — no Passport
+- **Email:** [`@onetodone/mailer`](https://github.com/onetodone/mailer) over SMTP (`nodemailer`) — address verification, password reset, password-changed notice
 - **Observability:** `nestjs-pino` structured logs, Prometheus `/metrics`, `/health` + `/health/ready`
 - **Rate limiting:** `@nestjs/throttler` (in-memory, per-IP)
 
@@ -55,6 +56,8 @@ ClicksService: INCR shortlink:clicks:{code} + SADD shortlink:clicks:dirty
 - **PostgreSQL 18** and **Redis**, reachable at the addresses configured in `.env`
   (`DATABASE_URL`, `REDIS_HOST` / `REDIS_PORT` / `REDIS_PASSWORD`). Create the database
   before running the migrations.
+- An **SMTP server** for account emails (`SMTP_*`). In development, a catcher such as
+  [Mailpit](https://mailpit.axllent.org) on port `1025` keeps the emails local.
 
 ---
 
@@ -86,16 +89,20 @@ endpoints (`/health`, `/health/ready`, `/metrics`).
 
 | Method & path                    | Auth                                 | Body                                                        | Result                                                                                                          |
 | -------------------------------- | ------------------------------------ | ----------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------- |
-| `POST /api/v1/auth/register`     | –                                    | `{ email, password }` (password 8–128)                      | `201 { user, accessToken }` + `refresh_token` cookie                                                            |
+| `POST /api/v1/auth/register`     | –                                    | `{ email, password }` (password 8–128)                      | `201 { user, accessToken }` + `refresh_token` cookie · emails a confirmation link                               |
 | `POST /api/v1/auth/login`        | –                                    | `{ email, password }`                                       | `200 { user, accessToken }` + `refresh_token` cookie                                                            |
 | `POST /api/v1/auth/refresh`      | `refresh_token` cookie               | –                                                           | `200 { user, accessToken }` + rotated `refresh_token` cookie                                                    |
 | `POST /api/v1/auth/logout`       | Bearer access token                  | –                                                           | `204` — revokes this session · clears the cookie                                                                |
 | `POST /api/v1/auth/logout-all`   | Bearer access token                  | –                                                           | `204` — revokes every session the caller owns                                                                   |
-| `GET /api/v1/auth/me`            | Bearer access token                  | –                                                           | `200 { id, email, createdAt }`                                                                                  |
-| `POST /api/v1/urls`              | Bearer access token                  | `{ url, note? }` (`http`/`https`, ≤ 2048 chars; note ≤ 200) | `201 { shortCode, shortUrl, originalUrl, note, createdAt, updatedAt }` · `422` destination rule · `429` quota                                        |
+| `GET /api/v1/auth/me`            | Bearer access token                  | –                                                           | `200 { id, email, emailVerified, createdAt }`                                                                   |
+| `POST /api/v1/auth/verify-email` | –                                    | `{ token }`                                                 | `200 { user }` · `400 INVALID_TOKEN`                                                                            |
+| `POST /api/v1/auth/verify-email/resend` | Bearer access token           | –                                                           | `204` (also when already confirmed) · `429 EMAIL_COOLDOWN`                                                      |
+| `POST /api/v1/auth/password/forgot` | –                                 | `{ email }`                                                 | `204` always — emails a reset link only if the account exists                                                   |
+| `POST /api/v1/auth/password/reset` | –                                  | `{ token, password }` (password 8–128)                      | `204` — revokes every session · clears the cookie · `400 INVALID_TOKEN`                                         |
+| `POST /api/v1/urls`              | Bearer access token                  | `{ url, note? }` (`http`/`https`, ≤ 2048 chars; note ≤ 200) | `201 { shortCode, shortUrl, originalUrl, note, createdAt, updatedAt }` · `403` unconfirmed email · `422` destination rule · `429` quota                                        |
 | `GET /api/v1/urls`               | Bearer access token                  | `?limit` (1–100, def. 20), `?offset` (≥ 0, def. 0)          | `200 { items[], total, limit, offset }` — caller's URLs, newest first                                           |
 | `GET /api/v1/urls/:shortCode`    | Bearer access token (**owner only**) | –                                                           | `200 { shortCode, shortUrl, originalUrl, note, clicks, createdAt, updatedAt }` · `404` unknown **or** not owner |
-| `PATCH /api/v1/urls/:shortCode`  | Bearer access token (**owner only**) | `{ url?, note? }` (at least one)                            | `200` — same body as `GET` · `404` unknown **or** not owner · `422` destination rule                                                   |
+| `PATCH /api/v1/urls/:shortCode`  | Bearer access token (**owner only**) | `{ url?, note? }` (at least one)                            | `200` — same body as `GET` · `403` unconfirmed email · `404` unknown **or** not owner · `422` destination rule                                                   |
 | `DELETE /api/v1/urls/:shortCode` | Bearer access token (**owner only**) | –                                                           | `204` · `404` unknown **or** not owner                                                                          |
 | `GET /:shortCode`                | –                                    | –                                                           | `302 Location: <originalUrl>` (`301` with `REDIRECT_STATUS=301`) · `404` unknown / malformed                    |
 | `GET /health`                    | –                                    | –                                                           | `200 { status: "ok" }` (liveness)                                                                               |
@@ -117,7 +124,7 @@ instead of failing — so parallel browser tabs racing on the same cookie don't 
 **After** the window, a retired secret means the token was copied: the whole session is deleted
 (taking any attacker-rotated copy with it) and a `warn` is logged. `POST /auth/logout` revokes the
 current session, `POST /auth/logout-all` revokes all of the caller's; expired rows are also swept
-hourly (`SESSION_CLEANUP_INTERVAL_MS`).
+hourly (`SESSION_CLEANUP_INTERVAL_MS`). `user` in every auth response is `{ id, email, emailVerified }`.
 
 The submitted URL is normalised (`new URL().href`) before it is stored, so
 `  HTTPS://Example.COM/A B  ` persists as `https://example.com/A%20B`. Duplicate URLs always get a
@@ -139,6 +146,30 @@ re-normalised the same way as on create, and `updatedAt` is bumped. Redis stays 
 cached destination is evicted when `PATCH` changes the URL (a note-only edit leaves it cached) and on
 `DELETE`, which also drops the code's pending click buffer so a later flush cannot revive a deleted
 row.
+
+### Email verification and password reset
+
+Registration emails a link to `${APP_URL}/verify-email?token=…`; the frontend page posts the token to
+`POST /auth/verify-email`. The account can sign in and list its links right away, but `POST` and
+`PATCH` on `/api/v1/urls` return `403` with `code: "EMAIL_NOT_VERIFIED"` until the address is
+confirmed. The check reads the account, not a token claim, so a confirmation applies to sessions
+already open. `POST /auth/verify-email/resend` sends a fresh link and retires the previous one; it is
+limited to one email per account per 60 s (`429 EMAIL_COOLDOWN` with `retryAfter`).
+
+`POST /auth/password/forgot` always answers `204` at once: looking up the account and sending
+happen in the background, so neither the answer nor its timing reveals whether an address is
+registered. An existing account gets a link to `${APP_URL}/reset-password?token=…`, at most one per
+60 s. `POST /auth/password/reset` sets the new password, revokes every session of the account
+(access tokens already issued stay valid until they expire), confirms the address if it wasn't, and
+emails a "password changed" notice with the requesting IP.
+
+Links are single-use: a confirmation link works for 24 h, a reset link for 1 h. Only
+`sha256(token)` is stored, in `verification_tokens`; expired rows are removed by the session sweep.
+An unknown, used or expired token returns `400` with `code: "INVALID_TOKEN"`.
+
+Emails are rendered by `@onetodone/mailer`'s built-in templates and handed to SMTP in the
+background: no response waits on the mail server, and a failed delivery is logged (the user can ask
+again).
 
 ### Destination rules and creation quota
 
@@ -195,6 +226,10 @@ TOKEN=$(curl -sX POST localhost:3000/api/v1/auth/register \
   -H 'content-type: application/json' \
   -d '{"email":"a@b.com","password":"password123"}' | jq -r .accessToken)
 
+# confirm the address with the token from the emailed link
+curl -sX POST localhost:3000/api/v1/auth/verify-email \
+  -H 'content-type: application/json' -d '{"token":"<token from the email>"}'
+
 # create
 curl -sX POST localhost:3000/api/v1/urls \
   -H "authorization: Bearer $TOKEN" -H 'content-type: application/json' \
@@ -241,7 +276,13 @@ the `env` object it exports. An invalid `.env` fails fast at startup.
 | `THROTTLE_TTL` / `THROTTLE_LIMIT`              | `60000` / `100`           | Global per-IP rate limit (ms / requests)         |
 | `JWT_SECRET`                                   | –                         | ≥ 16 chars, signs the access token (required)    |
 | `JWT_EXPIRES_IN` / `JWT_REFRESH_EXPIRES_IN`    | `15m` / `7d`              | Access-token lifetime / refresh-session TTL      |
-| `SESSION_CLEANUP_INTERVAL_MS`                  | `3600000`                 | Expired-session sweep cadence (min `60000`)      |
+| `SESSION_CLEANUP_INTERVAL_MS`                  | `3600000`                 | Expired-session and email-token sweep cadence (min `60000`) |
+| `APP_URL`                                      | –                         | Public frontend URL, base of emailed links (required) |
+| `SUPPORT_EMAIL`                                | –                         | Support address in every email (required)        |
+| `SMTP_HOST` / `SMTP_PORT`                      | –                         | SMTP server (required)                           |
+| `SMTP_USER` / `SMTP_PASS`                      | –                         | SMTP login                                       |
+| `SMTP_SECURE` / `SMTP_REQUIRE_TLS`             | – / –                     | Implicit TLS (default on port 465) / require STARTTLS |
+| `SMTP_FROM_EMAIL` / `SMTP_FROM_NAME`           | `SMTP_USER` / –           | Sender of every email; an address is required    |
 
 ---
 
@@ -290,8 +331,9 @@ Without it, every user of the frontend shares the frontend's IP in the rate limi
 ### Rate limiting
 
 A global `ThrottlerGuard` applies `THROTTLE_LIMIT` requests per `THROTTLE_TTL` per IP. The redirect
-hot path and the ops endpoints are exempt (`@SkipThrottle()`); `register` / `login` / `refresh`
-tighten to a fixed **10 requests / 60 s**. Storage is in-memory (per-instance) — swap in the Redis
+hot path and the ops endpoints are exempt (`@SkipThrottle()`); `register`, `login`, `verify-email`,
+`verify-email/resend`, `password/forgot` and `password/reset` tighten to a fixed
+**10 requests / 60 s**, and `refresh` to **120 requests / 60 s**. Storage is in-memory (per-instance) — swap in the Redis
 storage provider if you run more than one replica.
 
 ---
@@ -398,13 +440,15 @@ emits the decorator metadata Nest's dependency injection needs.
 
 - **Unit** (`test/unit/`) — pure logic: short-code generation, session token and hash helpers,
   duration parsing, env validation, the trusted-proxy rules, the request schemas, and the click filter
-  and redirect status.
+  and redirect status, and the account-email request schemas.
 - **Integration** (`test/integration/`) — the whole application, built by the same `createApp()` as
   `main.ts` and driven through Fastify's `inject()`, against real Postgres and Redis: registration,
   login, throttling, refresh rotation with the grace window and reuse revocation, logout, URL CRUD
   with ownership checks and cache eviction, the redirect cache (hit, miss, negative entry, stampede
   protection), click buffering and flushing, bots, prefetches and `HEAD` redirected without a click,
-  and the ops endpoints.
+  email verification and its gate on link creation, password reset with session revocation, resend
+  and reset cooldowns, token expiry and sweeping, and the ops endpoints. The tests replace the SMTP
+  transport with one that records each email, and read the links from it.
 
 Integration tests empty every table and every Redis key under their prefix, so they use a database
 whose name ends in `_test` — `TEST_DATABASE_URL`, or by default the database of `DATABASE_URL` with
@@ -425,9 +469,11 @@ request, and on demand (`workflow_dispatch`):
 - **`quality`** — `pnpm install --frozen-lockfile`, `prisma validate`, `prisma generate`,
   `format:check`, `lint:ci`, `typecheck`, `build`.
 - **`test`** — starts Postgres + Redis service containers and runs `pnpm test`.
-- **`e2e`** — starts Postgres + Redis service containers, applies migrations, fails on any schema
-  drift (`prisma migrate diff … --exit-code`), builds, boots the app, and runs `pnpm smoke`
-  (`scripts/smoke.ts`) against it — liveness, readiness, auth, create, redirect, and `/metrics`.
+- **`e2e`** — starts Postgres, Redis and [Mailpit](https://mailpit.axllent.org) service containers,
+  applies migrations, fails on any schema drift (`prisma migrate diff … --exit-code`), builds, boots
+  the app, and runs `pnpm smoke` (`scripts/smoke.ts`) against it — liveness, readiness, auth, email
+  verification and password reset (links read from Mailpit's API at `MAILPIT_URL`), create, redirect,
+  and `/metrics`.
 
 ---
 
@@ -446,13 +492,14 @@ src/
   common/types/http.d.ts     FastifyRequest / IncomingMessage `user` augmentation
   database/                  PrismaService (pg adapter, slow-query event log) + @Global module
   redis/                     tuned ioredis client + @Global module + InjectRedis()
+  mail/                      MailerModule from @onetodone/mailer/nestjs over the SMTP transport + MailService (background sends of the account emails)
   modules/
     urls/                    create + list + get + update + delete + resolve, short-code CSPRNG, destination rules + shortener list, creation quota, click buffer, redirect controller + bot/prefetch click filter
-    auth/                    bcrypt, access-JWT issue/verify, rotating refresh sessions + reuse detection, logout, hourly sweep
+    auth/                    bcrypt, access-JWT issue/verify, rotating refresh sessions + reuse detection, logout, email verification + gate, password reset, email cooldowns, hourly sweep
     health/                  liveness + readiness
     metrics/                 in-memory counters + Prometheus endpoint
 prisma/
-  schema.prisma              Url + User models
+  schema.prisma              Url, User, Session and VerificationToken models
   migrations/                prisma migrate history
   seed.ts                    demo data
 scripts/

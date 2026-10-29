@@ -133,6 +133,9 @@ importers:
       '@nestjs/throttler':
         specifier: ^6.5.0
         version: 6.5.0(@nestjs/common@12.0.1(reflect-metadata@0.2.2)(rxjs@7.8.2)(supports-color@7.2.0))(@nestjs/core@12.0.1(@nestjs/common@12.0.1(reflect-metadata@0.2.2)(rxjs@7.8.2)(supports-color@7.2.0))(reflect-metadata@0.2.2)(rxjs@7.8.2))(reflect-metadata@0.2.2)
+      '@onetodone/mailer':
+        specifier: ^0.3.8
+        version: 0.3.8(@nestjs/common@12.0.1(reflect-metadata@0.2.2)(rxjs@7.8.2)(supports-color@7.2.0))(nodemailer@10.2.1)
       '@prisma/adapter-pg':
         specifier: ^7.10.0
         version: 7.10.0
@@ -160,6 +163,9 @@ importers:
       nestjs-zod:
         specifier: ^5.5.0
         version: 5.5.0(@nestjs/common@12.0.1(reflect-metadata@0.2.2)(rxjs@7.8.2)(supports-color@7.2.0))(rxjs@7.8.2)(zod@4.5.4)
+      nodemailer:
+        specifier: ^10.2.1
+        version: 10.2.1
       pg:
         specifier: ^8.23.0
         version: 8.23.0
@@ -800,6 +806,18 @@ packages:
       '@nestjs/common': ^7.0.0 || ^8.0.0 || ^9.0.0 || ^10.0.0 || ^11.0.0
       '@nestjs/core': ^7.0.0 || ^8.0.0 || ^9.0.0 || ^10.0.0 || ^11.0.0
       reflect-metadata: ^0.1.13 || ^0.2.0
+
+  '@onetodone/mailer@0.3.8':
+    resolution: {integrity: sha512-u4oYlr7LMOTNsYcaDShnZpSAX5BFYw+Cw74r+QqAG0dNNhjevD9sLc6FgWYQX7USnDZrVCg1bXNrl/qs9JRqIA==}
+    engines: {node: '>=22'}
+    peerDependencies:
+      '@nestjs/common': '>=10'
+      nodemailer: '>=6'
+    peerDependenciesMeta:
+      '@nestjs/common':
+        optional: true
+      nodemailer:
+        optional: true
 
   '@oxc-project/types@0.155.0':
     resolution: {integrity: sha512-SeE8JPwW1xs1tHeNycjUtUBdhorRa8o4jlvjwk49R7/Z291i+4DQa7JJIgOm/TaYQZx+QrPQbVJ/9c8dMIZN8Q==}
@@ -2322,6 +2340,10 @@ packages:
     resolution: {integrity: sha512-Z3lTE9pLaJF47NyMhd4ww1yFTAP8YhYI8SleJiHzM46Fgpm5cnNzSl9XfzFNqbaz+VlJrIj3fXQ4DeN1Rjm6cw==}
     engines: {node: '>=18'}
 
+  nodemailer@10.2.1:
+    resolution: {integrity: sha512-ZrDNsPFoDMwefNs7sJwrYiEJ/CG4ClJWDZv05iNJsEBWa8GRDry1QJHTJxsuTAY9eDDKjX4k+q3SxslXJOao7w==}
+    engines: {node: '>=20.0.0'}
+
   obug@3.0.0:
     resolution: {integrity: sha512-5vvB5+W7ePv+p3uqxi+RcW1XAzLW0/hxt3/4X4Lc4qHudzOhmBiBwOY6DRob4WnanAEGvNcLjF+KNOufrUoEQw==}
     engines: {node: '>=12.20.0'}
@@ -2988,6 +3010,9 @@ packages:
   zod@4.5.4:
     resolution: {integrity: sha512-sC95tT5iHHH9gtpj6A81kh+NEaRAUFN+qlUPDUbRfOMvNf5QCBqsb3WgvnpVtK5Y+4UfA6KqufotuTvMGiTlsA==}
 
+  zod@4.6.7:
+    resolution: {integrity: sha512-g8W2D2kU6a8untc053fX1uVBKzM7yqAxW/3zwk83+6RyF2+SKOuV+c0wBDhUwzV1PaGapmZH+rmcUzPf+3CGwg==}
+
 snapshots:
 
   '@angular-devkit/core@22.1.5(chokidar@5.0.0)':
@@ -3478,6 +3503,13 @@ snapshots:
       '@nestjs/common': 12.0.1(reflect-metadata@0.2.2)(rxjs@7.8.2)(supports-color@7.2.0)
       '@nestjs/core': 12.0.1(@nestjs/common@12.0.1(reflect-metadata@0.2.2)(rxjs@7.8.2)(supports-color@7.2.0))(reflect-metadata@0.2.2)(rxjs@7.8.2)
       reflect-metadata: 0.2.2
+
+  '@onetodone/mailer@0.3.8(@nestjs/common@12.0.1(reflect-metadata@0.2.2)(rxjs@7.8.2)(supports-color@7.2.0))(nodemailer@10.2.1)':
+    dependencies:
+      zod: 4.6.7
+    optionalDependencies:
+      '@nestjs/common': 12.0.1(reflect-metadata@0.2.2)(rxjs@7.8.2)(supports-color@7.2.0)
+      nodemailer: 10.2.1
 
   '@oxc-project/types@0.155.0': {}
 
@@ -4962,6 +4994,8 @@ snapshots:
       emojilib: 2.4.0
       skin-tone: 2.0.0
 
+  nodemailer@10.2.1: {}
+
   obug@3.0.0: {}
 
   ohash@2.0.12: {}
@@ -5511,3 +5545,5 @@ snapshots:
       graphmatch: 1.1.1
 
   zod@4.5.4: {}
+
+  zod@4.6.7: {}
