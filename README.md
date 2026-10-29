@@ -1,7 +1,7 @@
 # Short Link API
 
 [![CI Status](https://github.com/onetodone/short-link-api/actions/workflows/ci.yml/badge.svg)](https://github.com/onetodone/short-link-api/actions/workflows/ci.yml)
-[![Version](https://img.shields.io/badge/version-1.0.1-blue.svg)](./package.json)
+[![Version](https://img.shields.io/badge/version-1.1.0-blue.svg)](./package.json)
 [![pnpm](https://img.shields.io/badge/pnpm-v12-F69220?logo=pnpm&logoColor=white)](https://pnpm.io/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](./LICENSE)
 
@@ -166,31 +166,32 @@ Every variable is parsed, coerced, and defaulted in one place — `src/config/en
 in `src/` reads `process.env`; the `registerAs` factories and the module-load helpers all consume
 the `env` object it exports. An invalid `.env` fails fast at startup.
 
-| Key                                            | Default                   | Purpose                                        |
-| ---------------------------------------------- | ------------------------- | ---------------------------------------------- |
-| `NODE_ENV`                                     | `development`             | `development` \| `production` \| `test`        |
-| `PORT`                                         | `3000`                    | HTTP listen port                               |
-| `API_PREFIX`                                   | `api/v1`                  | Prefix for the JSON API                        |
-| `CORS_ORIGIN`                                  | –                         | Comma-separated allow-list (`*` = reflect any) |
-| `COOKIE_SECRET`                                | –                         | Optional `@fastify/cookie` signing secret      |
-| `TRUSTED_PROXY`                                | `private`                 | Peers allowed to set `X-Forwarded-For`         |
-| `DATABASE_URL`                                 | –                         | Postgres connection string (required)          |
-| `REDIS_HOST` / `REDIS_PORT` / `REDIS_PASSWORD` | `localhost` / `6379` / –  | Redis connection                               |
-| `REDIS_KEY_PREFIX`                             | `shortlink:`              | Prefix on every Redis key                      |
-| `REDIS_TLS`                                    | `false`                   | `true` for TLS-only providers (e.g. Upstash)   |
-| `LOG_LEVEL`                                    | `debug` dev / `info` prod | pino level                                     |
-| `SLOW_QUERY_THRESHOLD_MS`                      | `200`                     | Prisma queries at/above this are `warn`-logged |
-| `SHORT_URL_BASE`                               | `http://localhost:$PORT`  | Base used to build the returned `shortUrl`     |
-| `SHORT_CODE_LENGTH`                            | `7`                       | base62 code length                             |
-| `SHORT_CODE_MAX_RETRIES`                       | `5`                       | Collision retries before `503`                 |
-| `CACHE_TTL_SECONDS`                            | `3600`                    | Positive cache TTL                             |
-| `CACHE_NEGATIVE_TTL_SECONDS`                   | `60`                      | Negative (unknown-code) cache TTL              |
-| `CACHE_LOCK_TTL_MS`                            | `3000`                    | `SET NX` stampede-lock TTL                     |
-| `CLICKS_FLUSH_INTERVAL_MS`                     | `5000`                    | Click-buffer flush cadence                     |
-| `THROTTLE_TTL` / `THROTTLE_LIMIT`              | `60000` / `100`           | Global per-IP rate limit (ms / requests)       |
-| `JWT_SECRET`                                   | –                         | ≥ 16 chars, signs the access token (required)  |
-| `JWT_EXPIRES_IN` / `JWT_REFRESH_EXPIRES_IN`    | `15m` / `7d`              | Access-token lifetime / refresh-session TTL    |
-| `SESSION_CLEANUP_INTERVAL_MS`                  | `3600000`                 | Expired-session sweep cadence (min `60000`)    |
+| Key                                            | Default                   | Purpose                                          |
+| ---------------------------------------------- | ------------------------- | ------------------------------------------------ |
+| `NODE_ENV`                                     | `development`             | `development` \| `production` \| `test`          |
+| `PORT`                                         | `3000`                    | HTTP listen port                                 |
+| `API_PREFIX`                                   | `api/v1`                  | Prefix for the JSON API                          |
+| `CORS_ORIGIN`                                  | –                         | Comma-separated allow-list (`*` = reflect any)   |
+| `COOKIE_SECRET`                                | –                         | Optional `@fastify/cookie` signing secret        |
+| `TRUSTED_PROXY`                                | `private`                 | Peers allowed to set `X-Forwarded-For`           |
+| `FRONT_PROXY_SECRET`                           | –                         | ≥ 32 chars; lets the frontend pass the client IP |
+| `DATABASE_URL`                                 | –                         | Postgres connection string (required)            |
+| `REDIS_HOST` / `REDIS_PORT` / `REDIS_PASSWORD` | `localhost` / `6379` / –  | Redis connection                                 |
+| `REDIS_KEY_PREFIX`                             | `shortlink:`              | Prefix on every Redis key                        |
+| `REDIS_TLS`                                    | `false`                   | `true` for TLS-only providers (e.g. Upstash)     |
+| `LOG_LEVEL`                                    | `debug` dev / `info` prod | pino level                                       |
+| `SLOW_QUERY_THRESHOLD_MS`                      | `200`                     | Prisma queries at/above this are `warn`-logged   |
+| `SHORT_URL_BASE`                               | `http://localhost:$PORT`  | Base used to build the returned `shortUrl`       |
+| `SHORT_CODE_LENGTH`                            | `7`                       | base62 code length                               |
+| `SHORT_CODE_MAX_RETRIES`                       | `5`                       | Collision retries before `503`                   |
+| `CACHE_TTL_SECONDS`                            | `3600`                    | Positive cache TTL                               |
+| `CACHE_NEGATIVE_TTL_SECONDS`                   | `60`                      | Negative (unknown-code) cache TTL                |
+| `CACHE_LOCK_TTL_MS`                            | `3000`                    | `SET NX` stampede-lock TTL                       |
+| `CLICKS_FLUSH_INTERVAL_MS`                     | `5000`                    | Click-buffer flush cadence                       |
+| `THROTTLE_TTL` / `THROTTLE_LIMIT`              | `60000` / `100`           | Global per-IP rate limit (ms / requests)         |
+| `JWT_SECRET`                                   | –                         | ≥ 16 chars, signs the access token (required)    |
+| `JWT_EXPIRES_IN` / `JWT_REFRESH_EXPIRES_IN`    | `15m` / `7d`              | Access-token lifetime / refresh-session TTL      |
+| `SESSION_CLEANUP_INTERVAL_MS`                  | `3600000`                 | Expired-session sweep cadence (min `60000`)      |
 
 ---
 
@@ -221,13 +222,19 @@ Rate limits, session records and request logs (`clientIp`) key on the client IP.
 `X-Forwarded-For` only when the request arrives from a trusted peer, so a client that reaches the app
 directly can't pick its own IP by sending the header. `TRUSTED_PROXY` sets which peers are trusted:
 
-- `private` (default) — loopback and private networks: nginx on the same host or a private network,
-  and the frontend's Next.js proxy. The proxy must append the client address
-  (nginx: `proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;`). The Next.js rewrite
-  proxy forwards the header it received without adding to it, so the frontend must itself sit
-  behind such a proxy; otherwise every browser request reaches the API as the frontend's own IP.
+- `private` (default) — loopback and private networks, such as nginx on the same host. The proxy
+  must append the client address (nginx: `proxy_set_header X-Forwarded-For
+$proxy_add_x_forwarded_for;`).
 - `all` — every peer, for a proxy on a public address such as a CDN in front of the origin.
 - `none` — no proxy; every request gets its socket address.
+
+**Frontend on another host.** The frontend's server-side proxy (for example on Vercel) reaches the
+API over the internet from addresses that change, so it can't be trusted by address. Set the same
+random value as `FRONT_PROXY_SECRET` here and as `API_PROXY_SECRET` on the frontend; it then sends
+`x-proxy-secret` with the browser's address in `x-client-ip`, and the API uses that address for
+requests carrying the secret. A request with a wrong or no secret falls back to the rules above, and
+a wrong one logs a warning at most once a minute. Generate a secret with `openssl rand -hex 32`.
+Without it, every user of the frontend shares the frontend's IP in the rate limits.
 
 ### Rate limiting
 
@@ -382,7 +389,7 @@ src/
   common/load-env.ts         side-effect `.env` load, imported first by main.ts and by config/env.ts
   common/api-prefix.ts       API_PREFIX constant shared by the JSON API controllers
   common/logging/            pino config (redaction, request serializers, userId + clientIp custom props)
-  common/trusted-proxy.ts    TRUSTED_PROXY trust function + clientIp(), shared by Fastify and the logger
+  common/trusted-proxy.ts    TRUSTED_PROXY trust + front-secret clientIp(), shared by throttler, sessions and logs
   common/types/http.d.ts     FastifyRequest / IncomingMessage `user` augmentation
   database/                  PrismaService (pg adapter, slow-query event log) + @Global module
   redis/                     tuned ioredis client + @Global module + InjectRedis()

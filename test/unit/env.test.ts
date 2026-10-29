@@ -38,6 +38,12 @@ describe('validateEnv', () => {
     expect(() => validateEnv({ ...REQUIRED, JWT_SECRET: 'short' })).toThrow('at least 16 characters')
   })
 
+  it('treats an empty FRONT_PROXY_SECRET as unset and rejects a short one', () => {
+    expect(validateEnv({ ...REQUIRED, FRONT_PROXY_SECRET: '' }).FRONT_PROXY_SECRET).toBeUndefined()
+    expect(validateEnv({ ...REQUIRED, FRONT_PROXY_SECRET: 'x'.repeat(32) }).FRONT_PROXY_SECRET).toBe('x'.repeat(32))
+    expect(() => validateEnv({ ...REQUIRED, FRONT_PROXY_SECRET: 'too-short' })).toThrow('FRONT_PROXY_SECRET')
+  })
+
   it('accepts only known TRUSTED_PROXY modes', () => {
     for (const mode of ['private', 'all', 'none']) {
       expect(validateEnv({ ...REQUIRED, TRUSTED_PROXY: mode }).TRUSTED_PROXY).toBe(mode)
