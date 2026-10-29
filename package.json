@@ -1,6 +1,6 @@
 {
   "name": "@onetodone/short-link-api",
-  "version": "1.1.1",
+  "version": "1.2.0",
   "description": "High-performance URL shortener API (NestJS + Fastify + Prisma + Redis)",
   "private": true,
   "author": "Anton Holubeu (https://github.com/aholu)",
@@ -44,6 +44,7 @@
     "dotenv": "^17.4.2",
     "fastify": "5.12.1",
     "ioredis": "^6.0.0",
+    "isbot": "^5.2.2",
     "nestjs-pino": "^5.1.0",
     "nestjs-zod": "^5.5.0",
     "pg": "^8.23.0",

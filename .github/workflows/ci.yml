@@ -146,6 +146,8 @@ jobs:
       REDIS_HOST: localhost
       REDIS_PORT: '6379'
       REDIS_KEY_PREFIX: 'shortlink-ci:'
+      REDIRECT_STATUS: '302'
+      CLICKS_FLUSH_INTERVAL_MS: '1000'
 
     steps:
       - uses: actions/checkout@v7

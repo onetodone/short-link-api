@@ -72,6 +72,12 @@ async function acquireToken(): Promise<string> {
   return payload.accessToken
 }
 
+// A browser User-Agent keeps the redirects on the click-counting path; bots skip it.
+const BROWSER_HEADERS = {
+  'user-agent':
+    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0 Safari/537.36',
+}
+
 function readScenario(): Options {
   return {
     url: target,
@@ -82,6 +88,7 @@ function readScenario(): Options {
     requests: [
       {
         method: 'GET',
+        headers: BROWSER_HEADERS,
         setupRequest: (request: ACRequest): ACRequest => {
           request.path = `/${randomCode()}`
           return request
@@ -94,7 +101,7 @@ function readScenario(): Options {
 function mixedScenario(token: string): Options {
   const get = (): ACRequest => ({
     method: 'GET',
-    headers: {},
+    headers: BROWSER_HEADERS,
     setupRequest: (request: ACRequest): ACRequest => {
       request.path = `/${randomCode()}`
       return request

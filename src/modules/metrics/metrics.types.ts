@@ -3,6 +3,7 @@ export type CounterName =
   | 'cache_misses_total'
   | 'urls_created_total'
   | 'http_redirects_total'
+  | 'http_redirects_bot_total'
   | 'clicks_flushed_total'
   | 'clicks_flush_errors_total'
 

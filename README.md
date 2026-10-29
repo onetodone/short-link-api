@@ -1,7 +1,7 @@
 # Short Link API
 
 [![CI Status](https://github.com/onetodone/short-link-api/actions/workflows/ci.yml/badge.svg)](https://github.com/onetodone/short-link-api/actions/workflows/ci.yml)
-[![Version](https://img.shields.io/badge/version-1.1.1-blue.svg)](./package.json)
+[![Version](https://img.shields.io/badge/version-1.2.0-blue.svg)](./package.json)
 [![pnpm](https://img.shields.io/badge/pnpm-v12-F69220?logo=pnpm&logoColor=white)](https://pnpm.io/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](./LICENSE)
 
@@ -13,8 +13,8 @@
 
 The backend HTTP service (`@onetodone/short-link-api`) for a high-performance URL shortener, built for
 the read path. Redirects are served from a Redis cache-aside layer with stampede protection, click
-analytics are buffered in Redis and flushed to Postgres in batches, and the `301` response never
-waits on a database write.
+analytics are buffered in Redis and flushed to Postgres in batches, and the redirect never waits on
+a database write.
 
 - **Framework:** NestJS 12 on the **Fastify** adapter
 - **Storage:** PostgreSQL via Prisma 7 (`prisma-client` generator, `pg` driver adapter)
@@ -37,8 +37,11 @@ POST /api/v1/urls                       GET /:shortCode
     generateShortCode (async CSPRNG)        2. Redis GET  -> hit / negative sentinel
     prisma.url.create (retry on P2002)      3. miss: SET NX lock -> prisma.findUnique
   -> 201 { shortCode, shortUrl, ... }              -> SET EX (url | "not-found")
-                                           ClicksService.increment(code)   (fire-and-forget)
-                                         -> 301 Location: <originalUrl>
+                                          isHumanClick(method, headers)
+                                            yes: ClicksService.increment(code)  (fire-and-forget)
+                                            no:  http_redirects_bot_total++
+                                         -> 302 Location: <originalUrl>
+                                            Cache-Control: private, max-age=0
 
 ClicksService: INCR shortlink:clicks:{code} + SADD shortlink:clicks:dirty
                setInterval(flush): GETDEL each dirty code -> one prisma.$transaction of updateMany
@@ -93,7 +96,7 @@ endpoints (`/health`, `/health/ready`, `/metrics`).
 | `GET /api/v1/urls`               | Bearer access token                  | `?limit` (1–100, def. 20), `?offset` (≥ 0, def. 0) | `200 { items[], total, limit, offset }` — caller's URLs, newest first                                     |
 | `PATCH /api/v1/urls/:shortCode`  | Bearer access token (**owner only**) | `{ url }` (only the destination is mutable)        | `200 { shortCode, shortUrl, originalUrl, clicks, createdAt, updatedAt }` · `404` unknown **or** not owner |
 | `DELETE /api/v1/urls/:shortCode` | Bearer access token (**owner only**) | –                                                  | `204` · `404` unknown **or** not owner                                                                    |
-| `GET /:shortCode`                | –                                    | –                                                  | `301 Location: <originalUrl>` · `404` unknown / malformed                                                 |
+| `GET /:shortCode`                | –                                    | –                                                  | `302 Location: <originalUrl>` (`301` with `REDIRECT_STATUS=301`) · `404` unknown / malformed              |
 | `GET /health`                    | –                                    | –                                                  | `200 { status: "ok" }` (liveness)                                                                         |
 | `GET /health/ready`              | –                                    | –                                                  | `200 { status, database, redis }` · `503` if a dependency is down                                         |
 | `GET /metrics`                   | –                                    | –                                                  | `200` Prometheus text exposition                                                                          |
@@ -131,6 +134,21 @@ is re-normalised the same way as on create) and bumps `updatedAt`. Both operatio
 consistent: the cached destination is evicted on either, and `DELETE` also drops the code's pending
 click buffer so a later flush cannot revive a deleted row.
 
+### Click counting
+
+`clicks` counts people. `GET /:shortCode` redirects every caller, but a hit is counted only when it
+is a `GET` from a browser: requests whose `User-Agent` matches [`isbot`](https://github.com/omrilotan/isbot)
+(search bots, link-preview crawlers such as Slack, Telegram, Facebook, X, Discord and WhatsApp, and
+HTTP clients like `curl`), requests without a `User-Agent`, browser prefetches (`Sec-Purpose: prefetch`,
+`Purpose` / `X-Purpose` / `X-Moz: prefetch | preview`) and `HEAD` requests are redirected but not
+counted; they show up in the `http_redirects_bot_total` metric instead.
+
+The redirect is a `302` with `Cache-Control: private, max-age=0` by default, so every visit reaches
+the service: a `PATCH`ed destination applies to returning visitors at once and their repeat clicks are
+counted. `REDIRECT_STATUS=301` switches to a permanent redirect, which browsers cache indefinitely —
+after the first visit they go straight to the destination, so later edits and clicks never reach the
+service.
+
 ### Routing
 
 The JSON API controllers each carry `API_PREFIX`, resolved from the `src/config/env.ts` helper
@@ -154,7 +172,8 @@ curl -sX POST localhost:3000/api/v1/urls \
   -d '{"url":"https://example.com/some/long/path"}'
 # { "shortCode":"aB3xK9p", "shortUrl":"http://localhost:3000/aB3xK9p", ... }
 
-# resolve (1st = Cache Miss, 2nd = Cache Hit; both 301)
+# resolve (1st = Cache Miss, 2nd = Cache Hit; both 302). curl is a bot to the click counter,
+# so this redirects without counting a click.
 curl -si localhost:3000/aB3xK9p | head -1
 ```
 
@@ -184,6 +203,7 @@ the `env` object it exports. An invalid `.env` fails fast at startup.
 | `SHORT_URL_BASE`                               | `http://localhost:$PORT`  | Base used to build the returned `shortUrl`       |
 | `SHORT_CODE_LENGTH`                            | `7`                       | base62 code length                               |
 | `SHORT_CODE_MAX_RETRIES`                       | `5`                       | Collision retries before `503`                   |
+| `REDIRECT_STATUS`                              | `302`                     | `GET /:shortCode` status: `301` \| `302`         |
 | `CACHE_TTL_SECONDS`                            | `3600`                    | Positive cache TTL                               |
 | `CACHE_NEGATIVE_TTL_SECONDS`                   | `60`                      | Negative (unknown-code) cache TTL                |
 | `CACHE_LOCK_TTL_MS`                            | `3000`                    | `SET NX` stampede-lock TTL                       |
@@ -207,7 +227,8 @@ the `env` object it exports. An invalid `.env` fails fast at startup.
   | `cache_hits_total`          | resolutions served from Redis (incl. negative-sentinel hits) |
   | `cache_misses_total`        | resolutions that fell through to Postgres                    |
   | `urls_created_total`        | successful `POST /api/v1/urls`                               |
-  | `http_redirects_total`      | successful `301` responses                                   |
+  | `http_redirects_total`      | successful redirects                                         |
+  | `http_redirects_bot_total`  | redirects not counted as clicks (bots, prefetches, `HEAD`)   |
   | `clicks_flushed_total`      | buffered clicks reconciled into Postgres                     |
   | `clicks_flush_errors_total` | flush cycles that failed and were re-buffered                |
   | `process_uptime_seconds`    | gauge, seconds since the registry was created                |
@@ -284,9 +305,9 @@ pnpm loadtest -- --scenario mixed --json        # write raw results to loadtest-
 
 **Scenarios**
 
-- **`read`** — 100 % `GET /:shortCode` against random seeded codes. Every response is a `301`
-  (autocannon does not follow redirects, so they show up as `3xx` / `non-2xx` — that is expected and
-  counts as success).
+- **`read`** — 100 % `GET /:shortCode` against random seeded codes, sent with a browser `User-Agent`
+  so every hit takes the click-counting path. Every response is a `302` (autocannon does not follow
+  redirects, so they show up as `3xx` / `non-2xx` — that is expected and counts as success).
 - **`mixed`** — 9 : 1 `GET /:shortCode` to `POST /api/v1/urls`. The runner logs in as the seeded
   load-test user to get a token; each write sends a unique URL.
 
@@ -306,12 +327,12 @@ or unexpected `4xx`). The process exits non-zero if any scenario fails.
 
 | Scenario                       | req/s   | p50  | p99   | p99.9 | errors |
 | ------------------------------ | ------- | ---- | ----- | ----- | ------ |
-| `read` (GET → 301)             | ~10 200 | 3 ms | 15 ms | 24 ms | 0      |
+| `read` (GET → 302)             | ~12 600 | 3 ms | 9 ms  | 16 ms | 0      |
 | `mixed` (90 % GET / 10 % POST) | ~6 300  | 7 ms | 15 ms | 20 ms | 0      |
 
 During that run `cache_misses_total` settled at ~10 000 (one cold miss per seeded code, everything
-else from Redis) and `clicks_flushed_total` reconciled to `http_redirects_total` in Postgres with
-`clicks_flush_errors_total = 0`.
+else from Redis) and `clicks_flushed_total` reconciled to `http_redirects_total` minus
+`http_redirects_bot_total` in Postgres with `clicks_flush_errors_total = 0`.
 
 ### 4. Clean up
 
@@ -346,12 +367,14 @@ pnpm loadtest:seed -- --reset --count 1     # drop the load-test rows
 emits the decorator metadata Nest's dependency injection needs.
 
 - **Unit** (`test/unit/`) — pure logic: short-code generation, session token and hash helpers,
-  duration parsing, env validation, the trusted-proxy rules, and the request schemas.
+  duration parsing, env validation, the trusted-proxy rules, the request schemas, and the click filter
+  and redirect status.
 - **Integration** (`test/integration/`) — the whole application, built by the same `createApp()` as
   `main.ts` and driven through Fastify's `inject()`, against real Postgres and Redis: registration,
   login, throttling, refresh rotation with the grace window and reuse revocation, logout, URL CRUD
   with ownership checks and cache eviction, the redirect cache (hit, miss, negative entry, stampede
-  protection), click buffering and flushing, and the ops endpoints.
+  protection), click buffering and flushing, bots, prefetches and `HEAD` redirected without a click,
+  and the ops endpoints.
 
 Integration tests empty every table and every Redis key under their prefix, so they use a database
 whose name ends in `_test` — `TEST_DATABASE_URL`, or by default the database of `DATABASE_URL` with
@@ -394,7 +417,7 @@ src/
   database/                  PrismaService (pg adapter, slow-query event log) + @Global module
   redis/                     tuned ioredis client + @Global module + InjectRedis()
   modules/
-    urls/                    create + list + update + delete + resolve, short-code CSPRNG, click buffer, redirect controller
+    urls/                    create + list + update + delete + resolve, short-code CSPRNG, click buffer, redirect controller + bot/prefetch click filter
     auth/                    bcrypt, access-JWT issue/verify, rotating refresh sessions + reuse detection, logout, hourly sweep
     health/                  liveness + readiness
     metrics/                 in-memory counters + Prometheus endpoint

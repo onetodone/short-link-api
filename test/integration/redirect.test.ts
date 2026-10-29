@@ -4,7 +4,7 @@ import { ClicksService } from '@/modules/urls/clicks.service'
 
 import packageJson from '../../package.json'
 
-import { startApp, type TestApp } from './helpers/app'
+import { BROWSER, startApp, type TestApp } from './helpers/app'
 
 let t: TestApp
 let urlQueries = 0
@@ -39,7 +39,7 @@ async function metrics(): Promise<string> {
 }
 
 describe('GET /:shortCode', () => {
-  it('redirects with 301, filling the cache on the first hit and reading it afterwards', async () => {
+  it('redirects with an uncacheable 302, filling the cache on the first hit and reading it afterwards', async () => {
     await seedUrl('abc1234')
     const before = await metrics()
 
@@ -47,8 +47,9 @@ describe('GET /:shortCode', () => {
     const second = await t.app.inject({ method: 'GET', url: '/abc1234' })
 
     for (const response of [first, second]) {
-      expect(response.statusCode).toBe(301)
+      expect(response.statusCode).toBe(302)
       expect(response.headers.location).toBe('https://example.com/target')
+      expect(response.headers['cache-control']).toBe('private, max-age=0')
     }
     expect(await t.redis.get('url:abc1234')).toBe('https://example.com/target')
     expect(urlQueries).toBe(1)
@@ -67,7 +68,7 @@ describe('GET /:shortCode', () => {
       Array.from({ length: 25 }, () => t.app.inject({ method: 'GET', url: '/burst01' })),
     )
 
-    expect(responses.every((response) => response.statusCode === 301)).toBe(true)
+    expect(responses.every((response) => response.statusCode === 302)).toBe(true)
     expect(lookups).toHaveBeenCalledTimes(1)
     lookups.mockRestore()
   })
@@ -106,7 +107,7 @@ describe('GET /:shortCode', () => {
   it('buffers clicks in Redis and flushes them to Postgres', async () => {
     await seedUrl('click01')
     for (let n = 0; n < 3; n += 1) {
-      await t.app.inject({ method: 'GET', url: '/click01' })
+      await t.app.inject({ method: 'GET', url: '/click01', headers: BROWSER })
     }
 
     await expect.poll(() => t.redis.get('clicks:click01')).toBe('3')
@@ -118,6 +119,47 @@ describe('GET /:shortCode', () => {
     expect((await t.prisma.url.findUniqueOrThrow({ where: { shortCode: 'click01' } })).clicks).toBe(3)
     expect(await t.redis.exists('clicks:click01')).toBe(0)
     expect(await t.redis.scard('clicks:dirty')).toBe(0)
+  })
+})
+
+describe('click counting', () => {
+  it.each([
+    ['a link-preview crawler', { 'user-agent': 'Slackbot-LinkExpanding 1.0 (+https://api.slack.com/robots)' }],
+    ['a search bot', { 'user-agent': 'Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)' }],
+    ['a browser prefetch', { ...BROWSER, 'sec-purpose': 'prefetch' }],
+  ])('redirects %s without counting a click', async (_label, headers) => {
+    await seedUrl('bot0001')
+    const before = await metrics()
+
+    const response = await t.app.inject({ method: 'GET', url: '/bot0001', headers })
+
+    expect(response.statusCode).toBe(302)
+    expect(response.headers.location).toBe('https://example.com/target')
+    expect(await t.redis.exists('clicks:bot0001')).toBe(0)
+    const after = await metrics()
+    expect(metric(after, 'http_redirects_bot_total') - metric(before, 'http_redirects_bot_total')).toBe(1)
+    expect(metric(after, 'http_redirects_total') - metric(before, 'http_redirects_total')).toBe(1)
+  })
+
+  it('answers HEAD with the redirect without counting a click', async () => {
+    await seedUrl('head001')
+
+    const response = await t.app.inject({ method: 'HEAD', url: '/head001', headers: BROWSER })
+
+    expect(response.statusCode).toBe(302)
+    expect(response.headers.location).toBe('https://example.com/target')
+    expect(await t.redis.exists('clicks:head001')).toBe(0)
+  })
+
+  it('counts a browser click and leaves the bot counter alone', async () => {
+    await seedUrl('human01')
+    const before = await metrics()
+
+    await t.app.inject({ method: 'GET', url: '/human01', headers: BROWSER })
+
+    await expect.poll(() => t.redis.get('clicks:human01')).toBe('1')
+    const after = await metrics()
+    expect(metric(after, 'http_redirects_bot_total') - metric(before, 'http_redirects_bot_total')).toBe(0)
   })
 })
 

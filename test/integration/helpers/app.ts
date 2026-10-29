@@ -5,6 +5,12 @@ import { createApp } from '@/app.factory'
 import { PrismaService } from '@/database/prisma.service'
 import { REDIS } from '@/redis/redis.constants'
 
+/** Headers of a desktop browser, so a redirect counts as a click (`inject()`'s own User-Agent is a bot). */
+export const BROWSER = {
+  'user-agent':
+    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0 Safari/537.36',
+}
+
 export interface TestApp {
   app: NestFastifyApplication
   prisma: PrismaService
