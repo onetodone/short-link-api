@@ -11,5 +11,6 @@ import { UrlsService } from '@/modules/urls/urls.service'
   imports: [AuthModule],
   controllers: [UrlsController, RedirectController],
   providers: [UrlsService, ClicksService, CreateQuotaService],
+  exports: [UrlsService, CreateQuotaService],
 })
 export class UrlsModule {}

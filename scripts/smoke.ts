@@ -6,10 +6,11 @@
  * guarded create endpoint, email verification, a refused destination, the redirect (cache miss then
  * hit), a bot that is redirected but not counted as a click, an unknown-code 404, the Prometheus
  * /metrics counters, the refresh-session lifecycle (rotate, a racing tab converges, logout
- * revokes) and a password reset. Exits non-zero on the first failed check.
+ * revokes), a password reset, and account management (change the password, change the email,
+ * delete the account, after which its link no longer resolves). Exits non-zero on the first failed check.
  *
  * The app must send its email to a Mailpit instance whose HTTP API is at MAILPIT_URL; the
- * verification and reset links are read from there.
+ * verification, reset and email-change links are read from there.
  *
  *   node dist/src/main &
  *   BASE_URL=http://localhost:3000 MAILPIT_URL=http://localhost:8025 pnpm smoke
@@ -354,6 +355,8 @@ async function main(): Promise<void> {
   }
 
   // Password reset: the emailed link sets a new password, which then signs in.
+  const resetPassword = `${credentials.password}-reset`
+  let sessionToken: string
   {
     const json = { 'content-type': 'application/json' }
     const forgotRes = await fetch(apiUrl('auth/password/forgot'), {
@@ -365,23 +368,71 @@ async function main(): Promise<void> {
 
     const token = await emailedToken(credentials.email, '/reset-password')
     pass('password/forgot emailed a reset link')
-    const password = `${credentials.password}-reset`
     const resetRes = await fetch(apiUrl('auth/password/reset'), {
       method: 'POST',
       headers: json,
-      body: JSON.stringify({ token, password }),
+      body: JSON.stringify({ token, password: resetPassword }),
     })
     assert(resetRes.status === 204, `POST /${API_PREFIX}/auth/password/reset -> 204 (got ${resetRes.status})`)
 
     const loginRes = await fetch(apiUrl('auth/login'), {
       method: 'POST',
       headers: json,
-      body: JSON.stringify({ email: credentials.email, password }),
+      body: JSON.stringify({ email: credentials.email, password: resetPassword }),
     })
+    const loginBody = (await loginRes.json().catch(() => ({}))) as { accessToken?: unknown }
     assert(
       loginRes.status === 200,
       `POST /${API_PREFIX}/auth/login with the new password -> 200 (got ${loginRes.status})`,
     )
+    sessionToken = String(loginBody.accessToken)
+  }
+
+  // Account management: change the password, move to another address, then delete the account.
+  {
+    const headers = { 'content-type': 'application/json', authorization: `Bearer ${sessionToken}` }
+    const password = `${resetPassword}-changed`
+    const passwordRes = await fetch(apiUrl('auth/me/password'), {
+      method: 'PATCH',
+      headers,
+      body: JSON.stringify({ currentPassword: resetPassword, newPassword: password }),
+    })
+    assert(passwordRes.status === 204, `PATCH /${API_PREFIX}/auth/me/password -> 204 (got ${passwordRes.status})`)
+
+    const newEmail = `smoke+moved-${Date.now()}@short-link.test`
+    const emailRes = await fetch(apiUrl('auth/me/email'), {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ newEmail, password }),
+    })
+    assert(emailRes.status === 204, `POST /${API_PREFIX}/auth/me/email -> 204 (got ${emailRes.status})`)
+
+    const token = await emailedToken(newEmail, '/confirm-email')
+    pass('me/email emailed a confirmation link to the new address')
+    const confirmRes = await fetch(apiUrl('auth/email/confirm'), {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ token }),
+    })
+    const confirmBody = (await confirmRes.json().catch(() => ({}))) as { user?: { email?: unknown } }
+    assert(confirmRes.status === 200, `POST /${API_PREFIX}/auth/email/confirm -> 200 (got ${confirmRes.status})`)
+    assert(confirmBody.user?.email === newEmail, 'email/confirm reports the new address', confirmBody)
+
+    const deleteRes = await fetch(apiUrl('auth/me'), { method: 'DELETE', headers, body: JSON.stringify({ password }) })
+    assert(deleteRes.status === 204, `DELETE /${API_PREFIX}/auth/me -> 204 (got ${deleteRes.status})`)
+
+    const redirectRes = await fetch(`${BASE_URL}/${shortCode}`, { redirect: 'manual' })
+    assert(
+      redirectRes.status === 404,
+      `GET /${shortCode} after the account is deleted -> 404 (got ${redirectRes.status})`,
+    )
+
+    const loginRes = await fetch(apiUrl('auth/login'), {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ email: newEmail, password }),
+    })
+    assert(loginRes.status === 401, `POST /${API_PREFIX}/auth/login after deletion -> 401 (got ${loginRes.status})`)
   }
 
   console.log(`\nSmoke test passed — ${checks} checks.`)

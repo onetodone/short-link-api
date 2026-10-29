@@ -1,10 +1,15 @@
-import { Injectable, Logger, UnauthorizedException } from '@nestjs/common'
+import { ConflictException, Injectable, Logger, UnauthorizedException } from '@nestjs/common'
 import bcrypt from 'bcryptjs'
 
 import { hashSessionSecret } from '@/common/session-hash.util'
 import { generateSessionSecret } from '@/common/session-token.util'
 import { PrismaService } from '@/database/prisma.service'
-import { EMAIL_VERIFY_TTL_MINUTES, MailService, PASSWORD_RESET_TTL_MINUTES } from '@/mail/mail.service'
+import {
+  EMAIL_CHANGE_TTL_MINUTES,
+  EMAIL_VERIFY_TTL_MINUTES,
+  MailService,
+  PASSWORD_RESET_TTL_MINUTES,
+} from '@/mail/mail.service'
 import { BCRYPT_COST, toAuthUser, USER_SELECT } from '@/modules/auth/auth-user'
 import { EmailCooldownException, InvalidTokenException } from '@/modules/auth/auth.errors'
 import type { AuthUser, RequestContext } from '@/modules/auth/auth.types'
@@ -123,6 +128,60 @@ export class VerificationService {
     this.mail.sendPasswordChanged(user.email, { changedAt, ip: ctx.ip })
   }
 
+  /**
+   * Emails a confirmation link to `newEmail` and a notice to the current address. Throws
+   * `EmailCooldownException` while the previous request's cooldown runs. Whether `newEmail` is free
+   * is checked only on confirmation, so the request does not reveal which addresses are registered.
+   */
+  async requestEmailChange(user: { id: string; email: string }, newEmail: string, ctx: RequestContext): Promise<void> {
+    const retryAfter = await this.cooldown.acquire(`change:${user.id}`)
+    if (retryAfter > 0) {
+      throw new EmailCooldownException(retryAfter)
+    }
+
+    const token = await this.issue(user.id, VerificationTokenType.EMAIL_CHANGE, EMAIL_CHANGE_TTL_MINUTES, newEmail)
+    this.mail.sendEmailChangeVerification(newEmail, token)
+    this.mail.sendEmailChangeRequested(user.email, { newEmail, requestedAt: new Date(), ip: ctx.ip })
+  }
+
+  /**
+   * Moves the account to the address the token was issued for and marks it confirmed. Every other
+   * emailed link of the account stops working, so a reset link sent to the old address cannot be used.
+   * Throws `ConflictException` when another account took the address in the meantime.
+   */
+  async confirmEmailChange(token: string): Promise<AuthUser> {
+    const changedAt = new Date()
+    let result: { user: AuthUser; previousEmail: string } | null
+    try {
+      result = await this.prisma.$transaction(async (tx) => {
+        const claimed = await this.claim(tx, VerificationTokenType.EMAIL_CHANGE, token)
+        if (!claimed?.newEmail) return null
+
+        const previous = await tx.user.findUniqueOrThrow({ where: { id: claimed.userId }, select: { email: true } })
+        await tx.verificationToken.deleteMany({ where: { userId: claimed.userId } })
+        const user = await tx.user.update({
+          where: { id: claimed.userId },
+          data: { email: claimed.newEmail, emailVerifiedAt: changedAt },
+          select: USER_SELECT,
+        })
+        return { user: toAuthUser(user), previousEmail: previous.email }
+      })
+    } catch (error) {
+      if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002') {
+        throw new ConflictException('Email is already registered')
+      }
+      throw error
+    }
+
+    if (!result) {
+      throw new InvalidTokenException()
+    }
+
+    this.logger.log(`Email changed for user ${result.user.id}`)
+    this.mail.sendEmailChanged(result.previousEmail, { newEmail: result.user.email, changedAt })
+    return result.user
+  }
+
   async sweepExpired(): Promise<number> {
     const { count } = await this.prisma.verificationToken.deleteMany({ where: { expiresAt: { lt: new Date() } } })
     return count
@@ -138,7 +197,12 @@ export class VerificationService {
     this.mail.sendPasswordReset(user.email, token)
   }
 
-  private async issue(userId: string, type: VerificationTokenType, ttlMinutes: number): Promise<string> {
+  private async issue(
+    userId: string,
+    type: VerificationTokenType,
+    ttlMinutes: number,
+    newEmail?: string,
+  ): Promise<string> {
     const token = await generateSessionSecret()
     await this.prisma.$transaction([
       this.prisma.verificationToken.deleteMany({ where: { userId, type } }),
@@ -146,6 +210,7 @@ export class VerificationService {
         data: {
           userId,
           type,
+          newEmail,
           tokenHash: hashSessionSecret(token),
           expiresAt: new Date(Date.now() + ttlMinutes * 60_000),
         },
@@ -159,14 +224,18 @@ export class VerificationService {
    * Deletes the token if it is of `type` and unexpired, and returns its owner. Of two concurrent
    * claims on one token, only one gets it: the loser's delete waits for the winner and finds no row.
    */
-  private async claim(tx: Tx, type: VerificationTokenType, token: string): Promise<{ userId: string } | null> {
+  private async claim(
+    tx: Tx,
+    type: VerificationTokenType,
+    token: string,
+  ): Promise<{ userId: string; newEmail: string | null } | null> {
     const row = await tx.verificationToken.findUnique({
       where: { tokenHash: hashSessionSecret(token) },
-      select: { id: true, userId: true, type: true, expiresAt: true },
+      select: { id: true, userId: true, type: true, newEmail: true, expiresAt: true },
     })
     if (!row || row.type !== type || row.expiresAt.getTime() <= Date.now()) return null
 
     const { count } = await tx.verificationToken.deleteMany({ where: { id: row.id } })
-    return count === 1 ? { userId: row.userId } : null
+    return count === 1 ? { userId: row.userId, newEmail: row.newEmail } : null
   }
 }

@@ -16,6 +16,7 @@ import { Prisma } from '@prisma-client'
 const NEGATIVE_SENTINEL = 'not-found'
 const LOCK_WAIT_ATTEMPTS = 5
 const LOCK_WAIT_INTERVAL_MS = 40
+const EVICT_BATCH = 500
 
 const URL_SUMMARY_SELECT = {
   shortCode: true,
@@ -167,7 +168,27 @@ export class UrlsService {
     }
 
     await this.evictFromCache(shortCode)
-    await this.clicks.discard(shortCode)
+    await this.clicks.discard([shortCode])
+  }
+
+  /** Deletes every link owned by `userId` inside `tx` and returns their short codes, for `forget`. */
+  async deleteAllForUser(tx: Prisma.TransactionClient, userId: string): Promise<string[]> {
+    const rows = await tx.$queryRaw<{ shortCode: string }[]>`
+      DELETE FROM "urls" WHERE "userId" = ${userId}::uuid RETURNING "shortCode"`
+    return rows.map((row) => row.shortCode)
+  }
+
+  /** Drops the cached destinations and unflushed clicks of deleted short codes. Never throws. */
+  async forget(shortCodes: string[]): Promise<void> {
+    for (let start = 0; start < shortCodes.length; start += EVICT_BATCH) {
+      const keys = shortCodes.slice(start, start + EVICT_BATCH).map((shortCode) => this.urlKey(shortCode))
+      try {
+        await this.redis.del(...keys)
+      } catch (error) {
+        this.logger.warn(`Failed to evict cache for ${keys.length} code(s): ${(error as Error).message}`)
+      }
+    }
+    await this.clicks.discard(shortCodes)
   }
 
   private assertAllowedDestination(url: string): void {

@@ -21,6 +21,8 @@ export const loggerOptions: Params = {
         'req.headers["x-proxy-secret"]',
         'res.headers["set-cookie"]',
         '*.password',
+        '*.currentPassword',
+        '*.newPassword',
         '*.passwordHash',
         '*.token',
         '*.newEmail',

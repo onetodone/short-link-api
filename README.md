@@ -1,7 +1,7 @@
 # Short Link API
 
 [![CI Status](https://github.com/onetodone/short-link-api/actions/workflows/ci.yml/badge.svg)](https://github.com/onetodone/short-link-api/actions/workflows/ci.yml)
-[![Version](https://img.shields.io/badge/version-1.5.0-blue.svg)](./package.json)
+[![Version](https://img.shields.io/badge/version-1.6.0-blue.svg)](./package.json)
 [![pnpm](https://img.shields.io/badge/pnpm-v12-F69220?logo=pnpm&logoColor=white)](https://pnpm.io/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](./LICENSE)
 
@@ -99,6 +99,10 @@ endpoints (`/health`, `/health/ready`, `/metrics`).
 | `POST /api/v1/auth/verify-email/resend` | Bearer access token           | –                                                           | `204` (also when already confirmed) · `429 EMAIL_COOLDOWN`                                                      |
 | `POST /api/v1/auth/password/forgot` | –                                 | `{ email }`                                                 | `204` always — emails a reset link only if the account exists                                                   |
 | `POST /api/v1/auth/password/reset` | –                                  | `{ token, password }` (password 8–128)                      | `204` — revokes every session · clears the cookie · `400 INVALID_TOKEN`                                         |
+| `PATCH /api/v1/auth/me/password` | Bearer access token               | `{ currentPassword, newPassword }` (new 8–128)              | `204` — revokes every other session · emails a notice · `403 INVALID_PASSWORD`                                  |
+| `POST /api/v1/auth/me/email`     | Bearer access token                  | `{ newEmail, password }`                                    | `204` — emails a confirmation link to the new address and a notice to the current one · `400` same address · `403 INVALID_PASSWORD` · `429 EMAIL_COOLDOWN` |
+| `POST /api/v1/auth/email/confirm` | –                                   | `{ token }`                                                 | `200 { user }` with the new address · `400 INVALID_TOKEN` · `409` address taken                                 |
+| `DELETE /api/v1/auth/me`         | Bearer access token                  | `{ password }`                                              | `204` — deletes the account and all its links · clears the cookie · `403 INVALID_PASSWORD`                      |
 | `POST /api/v1/urls`              | Bearer access token                  | `{ url, note? }` (`http`/`https`, ≤ 2048 chars; note ≤ 200) | `201 { shortCode, shortUrl, originalUrl, note, createdAt, updatedAt }` · `403` unconfirmed email · `422` destination rule · `429` quota                                        |
 | `GET /api/v1/urls`               | Bearer access token                  | `?limit` (1–100, def. 20), `?offset` (≥ 0, def. 0)          | `200 { items[], total, limit, offset }` — caller's URLs, newest first                                           |
 | `GET /api/v1/urls/:shortCode`    | Bearer access token (**owner only**) | –                                                           | `200 { shortCode, shortUrl, originalUrl, note, clicks, createdAt, updatedAt }` · `404` unknown **or** not owner |
@@ -170,6 +174,29 @@ An unknown, used or expired token returns `400` with `code: "INVALID_TOKEN"`.
 Emails are rendered by `@onetodone/mailer`'s built-in templates and handed to SMTP in the
 background: no response waits on the mail server, and a failed delivery is logged (the user can ask
 again).
+
+### Account management
+
+Every account change asks for the current password; a wrong one returns `403` with
+`code: "INVALID_PASSWORD"` (not `401`, so a client does not take it for an expired session).
+
+`PATCH /auth/me/password` sets a new password, keeps the calling session, revokes every other one
+and retires any pending reset link, then emails a "password changed" notice.
+
+`POST /auth/me/email` emails a link to `${APP_URL}/confirm-email?token=…` at the new address (valid
+24 h) and a notice naming the new address and the requesting IP to the current one. The account keeps
+its address until the frontend page posts the token to `POST /auth/email/confirm`, which moves it to
+the new address, marks it confirmed, retires every other emailed link of the account (so a reset link
+sent to the old address no longer works) and emails the old address. Whether the new address is free
+is checked only on confirmation (`409` if another account took it), so the request reveals nothing
+about which addresses are registered. A new request replaces a pending one; requests share the 60 s
+email cooldown (`429 EMAIL_COOLDOWN`). Open sessions stay signed in and pick up the new address at
+their next refresh.
+
+`DELETE /auth/me` deletes the account with its sessions, emailed links and every link it owns, then
+removes the links' cached destinations, unflushed clicks and the account's creation quota from Redis,
+so a deleted link answers `404` at once. A goodbye email goes to the address. Access tokens already
+issued stay valid until they expire, but every account route then answers `401`.
 
 ### Destination rules and creation quota
 
@@ -332,7 +359,8 @@ Without it, every user of the frontend shares the frontend's IP in the rate limi
 
 A global `ThrottlerGuard` applies `THROTTLE_LIMIT` requests per `THROTTLE_TTL` per IP. The redirect
 hot path and the ops endpoints are exempt (`@SkipThrottle()`); `register`, `login`, `verify-email`,
-`verify-email/resend`, `password/forgot` and `password/reset` tighten to a fixed
+`verify-email/resend`, `password/forgot`, `password/reset`, `me/password`, `me/email`, `email/confirm`
+and `DELETE /auth/me` tighten to a fixed
 **10 requests / 60 s**, and `refresh` to **120 requests / 60 s**. Storage is in-memory (per-instance) — swap in the Redis
 storage provider if you run more than one replica.
 
@@ -440,14 +468,15 @@ emits the decorator metadata Nest's dependency injection needs.
 
 - **Unit** (`test/unit/`) — pure logic: short-code generation, session token and hash helpers,
   duration parsing, env validation, the trusted-proxy rules, the request schemas, and the click filter
-  and redirect status, and the account-email request schemas.
+  and redirect status, and the account-email and account-management request schemas.
 - **Integration** (`test/integration/`) — the whole application, built by the same `createApp()` as
   `main.ts` and driven through Fastify's `inject()`, against real Postgres and Redis: registration,
   login, throttling, refresh rotation with the grace window and reuse revocation, logout, URL CRUD
   with ownership checks and cache eviction, the redirect cache (hit, miss, negative entry, stampede
   protection), click buffering and flushing, bots, prefetches and `HEAD` redirected without a click,
   email verification and its gate on link creation, password reset with session revocation, resend
-  and reset cooldowns, token expiry and sweeping, and the ops endpoints. The tests replace the SMTP
+  and reset cooldowns, token expiry and sweeping, password and email changes, account deletion with
+  its links and their cache keys, and the ops endpoints. The tests replace the SMTP
   transport with one that records each email, and read the links from it.
 
 Integration tests empty every table and every Redis key under their prefix, so they use a database
@@ -472,8 +501,8 @@ request, and on demand (`workflow_dispatch`):
 - **`e2e`** — starts Postgres, Redis and [Mailpit](https://mailpit.axllent.org) service containers,
   applies migrations, fails on any schema drift (`prisma migrate diff … --exit-code`), builds, boots
   the app, and runs `pnpm smoke` (`scripts/smoke.ts`) against it — liveness, readiness, auth, email
-  verification and password reset (links read from Mailpit's API at `MAILPIT_URL`), create, redirect,
-  and `/metrics`.
+  verification, password reset and account management (links read from Mailpit's API at
+  `MAILPIT_URL`), create, redirect, and `/metrics`.
 
 ---
 
@@ -495,6 +524,7 @@ src/
   mail/                      MailerModule from @onetodone/mailer/nestjs over the SMTP transport + MailService (background sends of the account emails)
   modules/
     urls/                    create + list + get + update + delete + resolve, short-code CSPRNG, destination rules + shortener list, creation quota, click buffer, redirect controller + bot/prefetch click filter
+    account/                 password change, email change + confirmation, account deletion with its links and cache keys
     auth/                    bcrypt, access-JWT issue/verify, rotating refresh sessions + reuse detection, logout, email verification + gate, password reset, email cooldowns, hourly sweep
     health/                  liveness + readiness
     metrics/                 in-memory counters + Prometheus endpoint

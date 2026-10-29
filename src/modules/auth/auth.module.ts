@@ -28,6 +28,6 @@ import { VerificationService } from '@/modules/auth/verification.service'
     EmailVerifiedGuard,
     SessionCleanupService,
   ],
-  exports: [JwtAuthGuard, EmailVerifiedGuard, JwtModule],
+  exports: [JwtAuthGuard, EmailVerifiedGuard, JwtModule, VerificationService],
 })
 export class AuthModule {}

@@ -4,6 +4,7 @@ import { MailerService } from '@onetodone/mailer/nestjs'
 
 export const EMAIL_VERIFY_TTL_MINUTES = 24 * 60
 export const PASSWORD_RESET_TTL_MINUTES = 60
+export const EMAIL_CHANGE_TTL_MINUTES = 24 * 60
 
 /**
  * Account emails. Every method hands the email to the transport in the background and returns at
@@ -40,6 +41,27 @@ export class MailService {
 
   sendPasswordChanged(to: string, details: { changedAt: Date; ip?: string }): void {
     this.dispatch(this.mailer.send('passwordChanged', { to, props: details }))
+  }
+
+  sendEmailChangeVerification(to: string, token: string): void {
+    this.dispatch(
+      this.mailer.send('verifyEmailChange', {
+        to,
+        props: { verifyUrl: this.link('/confirm-email', token), expiresInMinutes: EMAIL_CHANGE_TTL_MINUTES },
+      }),
+    )
+  }
+
+  sendEmailChangeRequested(to: string, details: { newEmail: string; requestedAt: Date; ip?: string }): void {
+    this.dispatch(this.mailer.send('emailChangeRequested', { to, props: details }))
+  }
+
+  sendEmailChanged(to: string, details: { newEmail: string; changedAt: Date }): void {
+    this.dispatch(this.mailer.send('emailChanged', { to, props: details }))
+  }
+
+  sendAccountDeleted(to: string): void {
+    this.dispatch(this.mailer.send('accountDeleted', { to, props: {} }))
   }
 
   private link(path: string, token: string): string {
