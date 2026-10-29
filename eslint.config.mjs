@@ -42,8 +42,16 @@ export default defineConfig([
     },
   },
 
+  // Vitest's asymmetric matchers (`expect.any(String)`) are typed `any`.
   {
-    files: ['eslint.config.mjs'],
+    files: ['test/**/*.ts'],
+    rules: {
+      '@typescript-eslint/no-unsafe-assignment': 'off',
+    },
+  },
+
+  {
+    files: ['eslint.config.mjs', 'vitest.config.mts'],
     ...tseslint.configs.disableTypeChecked,
   },
 ])

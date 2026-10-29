@@ -322,7 +322,9 @@ pnpm loadtest:seed -- --reset --count 1     # drop the load-test rows
 | `pnpm build`                            | `nest build` → `dist/src` + `dist/prisma/generated`      |
 | `pnpm typecheck`                        | `tsc --noEmit`                                           |
 | `pnpm lint` / `lint:ci`                 | ESLint (type-checked flat config) with / without `--fix` |
-| `pnpm format`                           | Prettier over `src`, `scripts`, `prisma`                 |
+| `pnpm format` / `format:check`          | Prettier over `src`, `test`, `scripts`, `prisma`         |
+| `pnpm test`                             | unit + integration tests (see [Tests](#tests))           |
+| `pnpm test:unit` / `test:integration`   | one project only; unit tests need no database            |
 | `pnpm prisma:migrate` / `prisma:deploy` | `prisma migrate dev` / `deploy`                          |
 | `pnpm db:seed`                          | demo user + demo URLs                                    |
 | `pnpm loadtest:seed`                    | populate the load-test dataset                           |
@@ -331,13 +333,38 @@ pnpm loadtest:seed -- --reset --count 1     # drop the load-test rows
 
 ---
 
+## Tests
+
+[Vitest](https://vitest.dev) with [`unplugin-swc`](https://github.com/unplugin/unplugin-swc), which
+emits the decorator metadata Nest's dependency injection needs.
+
+- **Unit** (`test/unit/`) — pure logic: short-code generation, session token and hash helpers,
+  duration parsing, env validation, the trusted-proxy rules, and the request schemas.
+- **Integration** (`test/integration/`) — the whole application, built by the same `createApp()` as
+  `main.ts` and driven through Fastify's `inject()`, against real Postgres and Redis: registration,
+  login, throttling, refresh rotation with the grace window and reuse revocation, logout, URL CRUD
+  with ownership checks and cache eviction, the redirect cache (hit, miss, negative entry, stampede
+  protection), click buffering and flushing, and the ops endpoints.
+
+Integration tests empty every table and every Redis key under their prefix, so they use a database
+whose name ends in `_test` — `TEST_DATABASE_URL`, or by default the database of `DATABASE_URL` with
+`_test` appended (`short_url` → `short_url_test`) — and the Redis key prefix `shortlink-test:`.
+Pending migrations are applied before the run, and Prisma creates the database if it doesn't exist.
+
+```bash
+pnpm test
+```
+
+---
+
 ## Continuous integration
 
 [`.github/workflows/ci.yml`](./.github/workflows/ci.yml) runs on every push to `main`, every pull
 request, and on demand (`workflow_dispatch`):
 
-- **`quality`** — `pnpm install --frozen-lockfile`, `prisma validate`, `prisma generate`, `lint:ci`,
-  `typecheck`, `build`.
+- **`quality`** — `pnpm install --frozen-lockfile`, `prisma validate`, `prisma generate`,
+  `format:check`, `lint:ci`, `typecheck`, `build`.
+- **`test`** — starts Postgres + Redis service containers and runs `pnpm test`.
 - **`e2e`** — starts Postgres + Redis service containers, applies migrations, fails on any schema
   drift (`prisma migrate diff … --exit-code`), builds, boots the app, and runs `pnpm smoke`
   (`scripts/smoke.ts`) against it — liveness, readiness, auth, create, redirect, and `/metrics`.
@@ -348,7 +375,8 @@ request, and on demand (`workflow_dispatch`):
 
 ```
 src/
-  main.ts                    Fastify bootstrap (trusted proxy, cookie, global prefix + excludes, Zod pipe)
+  main.ts                    binds the port
+  app.factory.ts             createApp(): Fastify adapter (trusted proxy), logger, Zod pipe, cookie, CORS — shared with the tests
   app.module.ts              config + logger + throttler + feature modules
   config/                    env.ts (single zod-validated env helper) + registerAs factories over it
   common/load-env.ts         side-effect `.env` load, imported first by main.ts and by config/env.ts
@@ -372,6 +400,9 @@ scripts/
   seed-loadtest.ts           bulk-insert N URLs, dump codes to .loadtest-codes.txt
   load-test.ts               autocannon read-heavy + mixed scenarios
   smoke.ts                   end-to-end smoke check (used by CI)
+test/
+  unit/                      pure-logic tests
+  integration/               whole-app tests against Postgres + Redis (helpers/ boots the app, resets state)
 ```
 
 ---
