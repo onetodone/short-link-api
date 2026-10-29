@@ -112,6 +112,9 @@ importers:
       '@fastify/cookie':
         specifier: ^11.1.2
         version: 11.1.2
+      '@fastify/proxy-addr':
+        specifier: ^5.1.0
+        version: 5.1.0
       '@nestjs/common':
         specifier: ^12.0.1
         version: 12.0.1(reflect-metadata@0.2.2)(rxjs@7.8.2)(supports-color@7.2.0)
