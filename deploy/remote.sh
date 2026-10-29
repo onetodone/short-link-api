@@ -17,6 +17,10 @@ corepack enable
 echo "==> Installing dependencies..."
 pnpm install --frozen-lockfile
 
+# pnpm skips postinstall when dependencies are unchanged, so the client must be generated explicitly
+echo "==> Generating Prisma client..."
+pnpm exec prisma generate
+
 echo "==> Deploying Prisma database migrations..."
 pnpm exec prisma migrate deploy
 

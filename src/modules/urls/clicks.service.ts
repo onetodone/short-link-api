@@ -79,8 +79,9 @@ export class ClicksService implements OnModuleInit, OnModuleDestroy {
 
       const deltas: ClickDelta[] = []
       for (const shortCode of codes) {
-        const raw = await this.redis.getdel(`${COUNTER_PREFIX}${shortCode}`)
+        // Clear the dirty flag first: a click landing after it re-adds the code, so it is never stranded.
         await this.redis.srem(DIRTY_SET, shortCode)
+        const raw = await this.redis.getdel(`${COUNTER_PREFIX}${shortCode}`)
 
         const delta = Number(raw ?? 0)
         if (Number.isFinite(delta) && delta > 0) {

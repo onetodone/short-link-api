@@ -120,6 +120,27 @@ describe('GET /:shortCode', () => {
     expect(await t.redis.exists('clicks:click01')).toBe(0)
     expect(await t.redis.scard('clicks:dirty')).toBe(0)
   })
+
+  it('keeps a click that lands while a flush drains the buffer', async () => {
+    await seedUrl('click02')
+    const clicks = t.app.get(ClicksService)
+    clicks.increment('click02')
+    await expect.poll(() => t.redis.get('clicks:click02')).toBe('1')
+
+    const getdel = t.redis.getdel.bind(t.redis)
+    const spy = vi.spyOn(t.redis, 'getdel').mockImplementationOnce(async (key) => {
+      const value = await getdel(key)
+      clicks.increment('click02')
+      await t.redis.ping()
+      return value
+    })
+    await clicks.flush()
+    spy.mockRestore()
+    await clicks.flush()
+
+    expect((await t.prisma.url.findUniqueOrThrow({ where: { shortCode: 'click02' } })).clicks).toBe(2)
+    expect(await t.redis.exists('clicks:click02')).toBe(0)
+  })
 })
 
 describe('click counting', () => {
