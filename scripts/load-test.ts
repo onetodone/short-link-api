@@ -176,7 +176,7 @@ function report(name: ScenarioName, result: Result): boolean {
     if (result['4xx'] > 0) {
       problems.push(
         `${result['4xx']} 4xx response(s) — POST /api/v1/urls is throttled; start the app with a raised ` +
-          'THROTTLE_LIMIT (e.g. THROTTLE_LIMIT=1000000) for a write-path load test',
+          'THROTTLE_LIMIT (e.g. THROTTLE_LIMIT=1000000) and URL_CREATE_DAILY_LIMIT=0 for a write-path load test',
       )
     }
   }

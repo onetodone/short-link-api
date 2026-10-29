@@ -6,6 +6,9 @@ import { PrismaService } from '@/database/prisma.service'
 import { MetricsService } from '@/modules/metrics/metrics.service'
 import { InjectRedis } from '@/redis/redis.constants'
 import { ClicksService } from '@/modules/urls/clicks.service'
+import { CreateQuotaService } from '@/modules/urls/create-quota.service'
+import { destinationRejection, hostnameOf } from '@/modules/urls/destination-rules'
+import { DestinationRejectedException } from '@/modules/urls/urls.errors'
 import { CreatedUrl, ListUrlsOptions, NewUrl, UrlChanges, UrlList, UrlSummary } from '@/modules/urls/urls.types'
 import { generateShortCode } from '@/modules/urls/short-code.util'
 import { Prisma } from '@prisma-client'
@@ -34,6 +37,7 @@ export class UrlsService {
   private readonly codeLength: number
   private readonly maxRetries: number
   private readonly baseUrl: string
+  private readonly ownHostname: string
   private readonly ttlSeconds: number
   private readonly negativeTtlSeconds: number
   private readonly lockTtlMs: number
@@ -45,17 +49,24 @@ export class UrlsService {
     @InjectRedis() private readonly redis: Redis,
     private readonly metrics: MetricsService,
     private readonly clicks: ClicksService,
+    private readonly quota: CreateQuotaService,
     config: ConfigService,
   ) {
     this.codeLength = config.get<number>('shortener.codeLength', 7)
     this.maxRetries = config.get<number>('shortener.maxRetries', 5)
     this.baseUrl = config.get<string>('shortener.baseUrl', 'http://localhost:3000')
+    this.ownHostname = hostnameOf(this.baseUrl)
     this.ttlSeconds = config.get<number>('cache.ttlSeconds', 3600)
     this.negativeTtlSeconds = config.get<number>('cache.negativeTtlSeconds', 60)
     this.lockTtlMs = config.get<number>('cache.lockTtlMs', 3000)
   }
 
   async create({ url: originalUrl, note = null }: NewUrl, userId: string | null): Promise<CreatedUrl> {
+    this.assertAllowedDestination(originalUrl)
+    if (userId !== null) {
+      await this.quota.consume(userId)
+    }
+
     for (let attempt = 1; attempt <= this.maxRetries; attempt += 1) {
       const shortCode = await generateShortCode(this.codeLength)
 
@@ -124,6 +135,10 @@ export class UrlsService {
   }
 
   async updateForUser(userId: string, shortCode: string, changes: UrlChanges): Promise<UrlSummary> {
+    if (changes.url !== undefined) {
+      this.assertAllowedDestination(changes.url)
+    }
+
     try {
       const record = await this.prisma.url.update({
         where: { shortCode, userId },
@@ -153,6 +168,13 @@ export class UrlsService {
 
     await this.evictFromCache(shortCode)
     await this.clicks.discard(shortCode)
+  }
+
+  private assertAllowedDestination(url: string): void {
+    const reason = destinationRejection(url, this.ownHostname)
+    if (reason !== null) {
+      throw new DestinationRejectedException(reason)
+    }
   }
 
   private toSummary(row: UrlSummaryRow): UrlSummary {

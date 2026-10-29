@@ -147,6 +147,7 @@ jobs:
       REDIS_PORT: '6379'
       REDIS_KEY_PREFIX: 'shortlink-ci:'
       REDIRECT_STATUS: '302'
+      URL_CREATE_DAILY_LIMIT: '10'
       CLICKS_FLUSH_INTERVAL_MS: '1000'
 
     steps:

@@ -1,7 +1,7 @@
 # Short Link API
 
 [![CI Status](https://github.com/onetodone/short-link-api/actions/workflows/ci.yml/badge.svg)](https://github.com/onetodone/short-link-api/actions/workflows/ci.yml)
-[![Version](https://img.shields.io/badge/version-1.3.1-blue.svg)](./package.json)
+[![Version](https://img.shields.io/badge/version-1.4.0-blue.svg)](./package.json)
 [![pnpm](https://img.shields.io/badge/pnpm-v12-F69220?logo=pnpm&logoColor=white)](https://pnpm.io/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](./LICENSE)
 
@@ -92,10 +92,10 @@ endpoints (`/health`, `/health/ready`, `/metrics`).
 | `POST /api/v1/auth/logout`       | Bearer access token                  | –                                                           | `204` — revokes this session · clears the cookie                                                                |
 | `POST /api/v1/auth/logout-all`   | Bearer access token                  | –                                                           | `204` — revokes every session the caller owns                                                                   |
 | `GET /api/v1/auth/me`            | Bearer access token                  | –                                                           | `200 { id, email, createdAt }`                                                                                  |
-| `POST /api/v1/urls`              | Bearer access token                  | `{ url, note? }` (`http`/`https`, ≤ 2048 chars; note ≤ 200) | `201 { shortCode, shortUrl, originalUrl, note, createdAt, updatedAt }`                                          |
+| `POST /api/v1/urls`              | Bearer access token                  | `{ url, note? }` (`http`/`https`, ≤ 2048 chars; note ≤ 200) | `201 { shortCode, shortUrl, originalUrl, note, createdAt, updatedAt }` · `422` destination rule · `429` quota                                        |
 | `GET /api/v1/urls`               | Bearer access token                  | `?limit` (1–100, def. 20), `?offset` (≥ 0, def. 0)          | `200 { items[], total, limit, offset }` — caller's URLs, newest first                                           |
 | `GET /api/v1/urls/:shortCode`    | Bearer access token (**owner only**) | –                                                           | `200 { shortCode, shortUrl, originalUrl, note, clicks, createdAt, updatedAt }` · `404` unknown **or** not owner |
-| `PATCH /api/v1/urls/:shortCode`  | Bearer access token (**owner only**) | `{ url?, note? }` (at least one)                            | `200` — same body as `GET` · `404` unknown **or** not owner                                                     |
+| `PATCH /api/v1/urls/:shortCode`  | Bearer access token (**owner only**) | `{ url?, note? }` (at least one)                            | `200` — same body as `GET` · `404` unknown **or** not owner · `422` destination rule                                                   |
 | `DELETE /api/v1/urls/:shortCode` | Bearer access token (**owner only**) | –                                                           | `204` · `404` unknown **or** not owner                                                                          |
 | `GET /:shortCode`                | –                                    | –                                                           | `302 Location: <originalUrl>` (`301` with `REDIRECT_STATUS=301`) · `404` unknown / malformed                    |
 | `GET /health`                    | –                                    | –                                                           | `200 { status: "ok" }` (liveness)                                                                               |
@@ -139,6 +139,29 @@ re-normalised the same way as on create, and `updatedAt` is bumped. Redis stays 
 cached destination is evicted when `PATCH` changes the URL (a note-only edit leaves it cached) and on
 `DELETE`, which also drops the code's pending click buffer so a later flush cannot revive a deleted
 row.
+
+### Destination rules and creation quota
+
+`POST` and `PATCH` (when it changes the URL) refuse destinations that hide where a link leads or
+point back into a private network. A refused URL returns `422` with `code: "DESTINATION_REJECTED"`
+and the rule in `reason`:
+
+| `reason`             | Rejected destination                                                                                   |
+| -------------------- | ------------------------------------------------------------------------------------------------------ |
+| `CREDENTIALS_IN_URL` | a username or password, e.g. `https://bank.example.com@evil.com` (opens `evil.com`)                    |
+| `IP_ADDRESS`         | an IPv4 or IPv6 host, including the decimal, octal and hex forms `new URL` turns into dotted quads     |
+| `LOCAL_HOST`         | a single-label host (`localhost`, `intranet`) or a special-use name (`.local`, `.internal`, `.test`…) |
+| `OWN_DOMAIN`         | the host of `SHORT_URL_BASE` — another short link, a redirect loop                                     |
+| `URL_SHORTENER`      | a known URL shortener, redirector or IP logger, or a subdomain of one (`src/modules/urls/url-shorteners.ts`) |
+
+Each account may create `URL_CREATE_DAILY_LIMIT` links (default `10`, `0` turns the quota off) per
+24 h window, which opens with its first creation. Past the limit `POST` returns `429` with
+`code: "CREATE_QUOTA_EXCEEDED"`, the `limit`, and `retryAfter` (seconds until the window resets).
+Refused destinations and edits don't count. The counter lives in Redis; if Redis is unreachable the
+creation goes through.
+
+Error bodies keep Nest's `{ statusCode, message, error }` shape; these errors add a machine-readable
+`code`.
 
 ### Click counting
 
@@ -210,6 +233,7 @@ the `env` object it exports. An invalid `.env` fails fast at startup.
 | `SHORT_CODE_LENGTH`                            | `7`                       | base62 code length                               |
 | `SHORT_CODE_MAX_RETRIES`                       | `5`                       | Collision retries before `503`                   |
 | `REDIRECT_STATUS`                              | `302`                     | `GET /:shortCode` status: `301` \| `302`         |
+| `URL_CREATE_DAILY_LIMIT`                       | `10`                      | Links per account per 24 h (`0` = no quota)      |
 | `CACHE_TTL_SECONDS`                            | `3600`                    | Positive cache TTL                               |
 | `CACHE_NEGATIVE_TTL_SECONDS`                   | `60`                      | Negative (unknown-code) cache TTL                |
 | `CACHE_LOCK_TTL_MS`                            | `3000`                    | `SET NX` stampede-lock TTL                       |
@@ -317,9 +341,9 @@ pnpm loadtest -- --scenario mixed --json        # write raw results to loadtest-
 - **`mixed`** — 9 : 1 `GET /:shortCode` to `POST /api/v1/urls`. The runner logs in as the seeded
   load-test user to get a token; each write sends a unique URL.
 
-> **Write-path throttling.** `POST /api/v1/urls` is subject to the global rate limit. For a
-> meaningful `mixed` run, start the app with a raised ceiling, e.g.
-> `THROTTLE_LIMIT=1000000 pnpm start:prod`. The runner flags a scenario `FAIL` and explains why if it
+> **Write-path throttling.** `POST /api/v1/urls` is subject to the global rate limit and the
+> per-account creation quota. For a meaningful `mixed` run, raise the ceiling and turn the quota off,
+> e.g. `THROTTLE_LIMIT=1000000 URL_CREATE_DAILY_LIMIT=0 pnpm start:prod`. The runner flags a scenario `FAIL` and explains why if it
 > sees `4xx` responses.
 
 ### 3. Interpreting the output
@@ -423,7 +447,7 @@ src/
   database/                  PrismaService (pg adapter, slow-query event log) + @Global module
   redis/                     tuned ioredis client + @Global module + InjectRedis()
   modules/
-    urls/                    create + list + get + update + delete + resolve, short-code CSPRNG, click buffer, redirect controller + bot/prefetch click filter
+    urls/                    create + list + get + update + delete + resolve, short-code CSPRNG, destination rules + shortener list, creation quota, click buffer, redirect controller + bot/prefetch click filter
     auth/                    bcrypt, access-JWT issue/verify, rotating refresh sessions + reuse detection, logout, hourly sweep
     health/                  liveness + readiness
     metrics/                 in-memory counters + Prometheus endpoint

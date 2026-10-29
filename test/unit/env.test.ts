@@ -19,6 +19,7 @@ describe('validateEnv', () => {
       REDIS_TLS: false,
       SHORT_CODE_LENGTH: 7,
       REDIRECT_STATUS: 302,
+      URL_CREATE_DAILY_LIMIT: 10,
       THROTTLE_LIMIT: 100,
     })
   })

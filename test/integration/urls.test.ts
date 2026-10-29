@@ -85,11 +85,111 @@ describe('POST /api/v1/urls', () => {
   })
 })
 
+describe('destination rules', () => {
+  it.each([
+    ['https://bank.example.com@evil.com/', 'CREDENTIALS_IN_URL'],
+    ['http://2130706433/', 'IP_ADDRESS'],
+    ['http://localhost:3000/', 'LOCAL_HOST'],
+    ['http://sho.rt/abc1234', 'OWN_DOMAIN'],
+    ['https://bit.ly/abc', 'URL_SHORTENER'],
+  ])('rejects %s on create with %s', async (url, reason) => {
+    const session = await register(t.app)
+    const response = await t.app.inject({
+      method: 'POST',
+      url: '/api/v1/urls',
+      headers: bearer(session),
+      payload: { url },
+    })
+
+    expect(response.statusCode).toBe(422)
+    expect(response.json()).toEqual({
+      statusCode: 422,
+      message: expect.any(String),
+      error: 'Unprocessable Entity',
+      code: 'DESTINATION_REJECTED',
+      reason,
+    })
+    expect(await t.prisma.url.count()).toBe(0)
+  })
+
+  it('rejects a destination change and keeps the link as it was', async () => {
+    const session = await register(t.app)
+    const { shortCode } = await createUrl(session, 'https://example.com')
+
+    const response = await t.app.inject({
+      method: 'PATCH',
+      url: `/api/v1/urls/${shortCode}`,
+      headers: bearer(session),
+      payload: { url: 'https://tinyurl.com/abc' },
+    })
+
+    expect(response.statusCode).toBe(422)
+    expect(response.json()).toMatchObject({ code: 'DESTINATION_REJECTED', reason: 'URL_SHORTENER' })
+    expect((await t.prisma.url.findUniqueOrThrow({ where: { shortCode } })).originalUrl).toBe('https://example.com/')
+  })
+
+  it('does not count a rejected destination against the quota', async () => {
+    const session = await register(t.app)
+    await t.app.inject({
+      method: 'POST',
+      url: '/api/v1/urls',
+      headers: bearer(session),
+      payload: { url: 'https://bit.ly/x' },
+    })
+    expect(await t.redis.get(`quota:create:${session.userId}`)).toBeNull()
+  })
+})
+
+describe('creation quota', () => {
+  it('trips at the daily limit per account', async () => {
+    const session = await register(t.app)
+    for (let n = 0; n < 10; n += 1) {
+      await createUrl(session, `https://example.com/${n}`)
+    }
+
+    const response = await t.app.inject({
+      method: 'POST',
+      url: '/api/v1/urls',
+      headers: bearer(session),
+      payload: { url: 'https://example.com/over' },
+    })
+
+    expect(response.statusCode).toBe(429)
+    expect(response.json()).toEqual({
+      statusCode: 429,
+      message: expect.any(String),
+      error: 'Too Many Requests',
+      code: 'CREATE_QUOTA_EXCEEDED',
+      limit: 10,
+      retryAfter: expect.any(Number),
+    })
+    expect(response.json<{ retryAfter: number }>().retryAfter).toBeGreaterThan(86_000)
+    expect(await t.prisma.url.count({ where: { userId: session.userId } })).toBe(10)
+
+    const other = await register(t.app)
+    await createUrl(other, 'https://example.com/other')
+  })
+
+  it('does not limit edits', async () => {
+    const session = await register(t.app)
+    const { shortCode } = await createUrl(session, 'https://example.com')
+    await t.redis.set(`quota:create:${session.userId}`, '10', 'EX', 60)
+
+    const response = await t.app.inject({
+      method: 'PATCH',
+      url: `/api/v1/urls/${shortCode}`,
+      headers: bearer(session),
+      payload: { url: 'https://example.com/edited' },
+    })
+    expect(response.statusCode).toBe(200)
+  })
+})
+
 describe('GET /api/v1/urls', () => {
   it("lists the caller's links newest first, with paging", async () => {
     const session = await register(t.app)
     const stranger = await register(t.app)
-    await createUrl(stranger, 'https://stranger.example')
+    await createUrl(stranger, 'https://stranger.example.com')
     for (const n of [1, 2, 3]) {
       await createUrl(session, `https://example.com/${n}`)
     }
@@ -155,19 +255,23 @@ describe('GET /api/v1/urls/:shortCode', () => {
 describe('PATCH /api/v1/urls/:shortCode', () => {
   it('changes the destination and evicts the cached redirect', async () => {
     const session = await register(t.app)
-    const { shortCode } = await createUrl(session, 'https://old.example')
-    expect((await t.app.inject({ method: 'GET', url: `/${shortCode}` })).headers.location).toBe('https://old.example/')
+    const { shortCode } = await createUrl(session, 'https://old.example.com')
+    expect((await t.app.inject({ method: 'GET', url: `/${shortCode}` })).headers.location).toBe(
+      'https://old.example.com/',
+    )
 
     const response = await t.app.inject({
       method: 'PATCH',
       url: `/api/v1/urls/${shortCode}`,
       headers: bearer(session),
-      payload: { url: 'https://new.example' },
+      payload: { url: 'https://new.example.com' },
     })
 
     expect(response.statusCode).toBe(200)
-    expect(response.json()).toMatchObject({ shortCode, originalUrl: 'https://new.example/', clicks: 0 })
-    expect((await t.app.inject({ method: 'GET', url: `/${shortCode}` })).headers.location).toBe('https://new.example/')
+    expect(response.json()).toMatchObject({ shortCode, originalUrl: 'https://new.example.com/', clicks: 0 })
+    expect((await t.app.inject({ method: 'GET', url: `/${shortCode}` })).headers.location).toBe(
+      'https://new.example.com/',
+    )
   })
 
   it('changes only the note and keeps the cached redirect', async () => {
@@ -220,17 +324,19 @@ describe('PATCH /api/v1/urls/:shortCode', () => {
   it("answers 404 for someone else's link and leaves it unchanged", async () => {
     const owner = await register(t.app)
     const intruder = await register(t.app)
-    const { shortCode } = await createUrl(owner, 'https://owner.example')
+    const { shortCode } = await createUrl(owner, 'https://owner.example.com')
 
     const response = await t.app.inject({
       method: 'PATCH',
       url: `/api/v1/urls/${shortCode}`,
       headers: bearer(intruder),
-      payload: { url: 'https://evil.example' },
+      payload: { url: 'https://evil.example.com' },
     })
 
     expect(response.statusCode).toBe(404)
-    expect((await t.prisma.url.findUniqueOrThrow({ where: { shortCode } })).originalUrl).toBe('https://owner.example/')
+    expect((await t.prisma.url.findUniqueOrThrow({ where: { shortCode } })).originalUrl).toBe(
+      'https://owner.example.com/',
+    )
   })
 
   it('answers 404 for an unknown or malformed code', async () => {

@@ -51,6 +51,7 @@ const envSchema = z.object({
     .enum(['301', '302'])
     .default('302')
     .transform((value) => (value === '301' ? 301 : 302)),
+  URL_CREATE_DAILY_LIMIT: z.coerce.number().int().min(0).default(10),
 
   CACHE_TTL_SECONDS: z.coerce.number().int().min(1).default(3600),
   CACHE_NEGATIVE_TTL_SECONDS: z.coerce.number().int().min(1).default(60),
