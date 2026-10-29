@@ -1,7 +1,7 @@
 # Short Link API
 
 [![CI Status](https://github.com/onetodone/short-link-api/actions/workflows/ci.yml/badge.svg)](https://github.com/onetodone/short-link-api/actions/workflows/ci.yml)
-[![Version](https://img.shields.io/badge/version-1.0.0-blue.svg)](./package.json)
+[![Version](https://img.shields.io/badge/version-1.0.1-blue.svg)](./package.json)
 [![pnpm](https://img.shields.io/badge/pnpm-v12-F69220?logo=pnpm&logoColor=white)](https://pnpm.io/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](./LICENSE)
 
@@ -173,6 +173,7 @@ the `env` object it exports. An invalid `.env` fails fast at startup.
 | `API_PREFIX`                                   | `api/v1`                  | Prefix for the JSON API                        |
 | `CORS_ORIGIN`                                  | –                         | Comma-separated allow-list (`*` = reflect any) |
 | `COOKIE_SECRET`                                | –                         | Optional `@fastify/cookie` signing secret      |
+| `TRUSTED_PROXY`                                | `private`                 | Peers allowed to set `X-Forwarded-For`         |
 | `DATABASE_URL`                                 | –                         | Postgres connection string (required)          |
 | `REDIS_HOST` / `REDIS_PORT` / `REDIS_PASSWORD` | `localhost` / `6379` / –  | Redis connection                               |
 | `REDIS_KEY_PREFIX`                             | `shortlink:`              | Prefix on every Redis key                      |
@@ -213,6 +214,20 @@ the `env` object it exports. An invalid `.env` fails fast at startup.
 - **Logs** — every request logs `method`, `url`, `remoteAddress`, `responseTime`, and `userId`
   (when authenticated). `authorization` / `cookie` headers and `password` / `token` fields are
   redacted. `Cache Hit` / `Cache Miss` are emitted at `debug`.
+
+### Client IP
+
+Rate limits, session records and request logs (`clientIp`) key on the client IP. It is taken from
+`X-Forwarded-For` only when the request arrives from a trusted peer, so a client that reaches the app
+directly can't pick its own IP by sending the header. `TRUSTED_PROXY` sets which peers are trusted:
+
+- `private` (default) — loopback and private networks: nginx on the same host or a private network,
+  and the frontend's Next.js proxy. The proxy must append the client address
+  (nginx: `proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;`). The Next.js rewrite
+  proxy forwards the header it received without adding to it, so the frontend must itself sit
+  behind such a proxy; otherwise every browser request reaches the API as the frontend's own IP.
+- `all` — every peer, for a proxy on a public address such as a CDN in front of the origin.
+- `none` — no proxy; every request gets its socket address.
 
 ### Rate limiting
 
@@ -333,12 +348,13 @@ request, and on demand (`workflow_dispatch`):
 
 ```
 src/
-  main.ts                    Fastify bootstrap (trustProxy, cookie, global prefix + excludes, Zod pipe)
+  main.ts                    Fastify bootstrap (trusted proxy, cookie, global prefix + excludes, Zod pipe)
   app.module.ts              config + logger + throttler + feature modules
   config/                    env.ts (single zod-validated env helper) + registerAs factories over it
   common/load-env.ts         side-effect `.env` load, imported first by main.ts and by config/env.ts
   common/api-prefix.ts       API_PREFIX constant shared by the JSON API controllers
-  common/logging/            pino config (redaction, request serializers, userId custom prop)
+  common/logging/            pino config (redaction, request serializers, userId + clientIp custom props)
+  common/trusted-proxy.ts    TRUSTED_PROXY trust function + clientIp(), shared by Fastify and the logger
   common/types/http.d.ts     FastifyRequest / IncomingMessage `user` augmentation
   database/                  PrismaService (pg adapter, slow-query event log) + @Global module
   redis/                     tuned ioredis client + @Global module + InjectRedis()

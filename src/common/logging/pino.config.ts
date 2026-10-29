@@ -1,5 +1,6 @@
 import type { Params } from 'nestjs-pino'
 
+import { clientIp } from '@/common/trusted-proxy'
 import { env } from '@/config/env'
 
 const isProduction = env.NODE_ENV === 'production'
@@ -29,6 +30,7 @@ export const loggerOptions: Params = {
     },
     customProps: (req) => ({
       userId: req.user?.id ?? null,
+      clientIp: clientIp(req),
     }),
   },
 }

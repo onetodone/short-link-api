@@ -14,6 +14,7 @@ const envSchema = z.object({
 
   CORS_ORIGIN: z.string().min(1),
   COOKIE_SECRET: z.string().optional(),
+  TRUSTED_PROXY: z.enum(['private', 'all', 'none']).default('private'),
 
   DATABASE_URL: z.string().min(1),
 

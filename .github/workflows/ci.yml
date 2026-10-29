@@ -84,6 +84,7 @@ jobs:
     env:
       DATABASE_URL: postgresql://postgres:postgres@localhost:5432/short_url?schema=public
       CORS_ORIGIN: '*'
+      TRUSTED_PROXY: private
       JWT_SECRET: ci-smoke-secret-only-not-for-production
       REDIS_HOST: localhost
       REDIS_PORT: '6379'

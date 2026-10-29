@@ -8,11 +8,12 @@ import { Logger } from 'nestjs-pino'
 import { ZodValidationPipe } from 'nestjs-zod'
 
 import { AppModule } from '@/app.module'
+import { trustProxy } from '@/common/trusted-proxy'
 
 async function bootstrap(): Promise<void> {
   const app = await NestFactory.create<NestFastifyApplication>(
     AppModule,
-    new FastifyAdapter({ trustProxy: true, bodyLimit: 1_048_576 }),
+    new FastifyAdapter({ trustProxy, bodyLimit: 1_048_576 }),
     { bufferLogs: true },
   )
 
