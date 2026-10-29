@@ -2,6 +2,8 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vites
 
 import { ClicksService } from '@/modules/urls/clicks.service'
 
+import packageJson from '../../package.json'
+
 import { startApp, type TestApp } from './helpers/app'
 
 let t: TestApp
@@ -140,6 +142,6 @@ describe('ops endpoints', () => {
 
   it('serves the API info route', async () => {
     const response = await t.app.inject({ method: 'GET', url: '/api/v1' })
-    expect(response.json()).toEqual({ name: 'short-link-api', version: expect.any(String) })
+    expect(response.json()).toEqual({ name: 'short-link-api', version: packageJson.version })
   })
 })
