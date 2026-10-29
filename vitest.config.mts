@@ -67,6 +67,7 @@ export default defineConfig({
             ...sharedEnv,
             DATABASE_URL: testDatabaseUrl(),
             REDIS_KEY_PREFIX: 'shortlink-test:',
+            FRONT_PROXY_SECRET: 'front-proxy-secret-for-integration-tests',
             THROTTLE_LIMIT: '10000',
             CLICKS_FLUSH_INTERVAL_MS: '3600000',
             SESSION_CLEANUP_INTERVAL_MS: '3600000',

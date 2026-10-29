@@ -15,6 +15,11 @@ const envSchema = z.object({
   CORS_ORIGIN: z.string().min(1),
   COOKIE_SECRET: z.string().optional(),
   TRUSTED_PROXY: z.enum(['private', 'all', 'none']).default('private'),
+  FRONT_PROXY_SECRET: z
+    .string()
+    .optional()
+    .transform((value) => value || undefined)
+    .pipe(z.string().min(32, 'FRONT_PROXY_SECRET must be at least 32 characters').optional()),
 
   DATABASE_URL: z.string().min(1),
 

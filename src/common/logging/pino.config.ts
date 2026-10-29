@@ -18,6 +18,7 @@ export const loggerOptions: Params = {
       paths: [
         'req.headers.authorization',
         'req.headers.cookie',
+        'req.headers["x-proxy-secret"]',
         'res.headers["set-cookie"]',
         '*.password',
         '*.passwordHash',
