@@ -3,13 +3,16 @@
  *
  * Assumes the app is already listening on BASE_URL. Walks the critical path:
  * liveness, readiness (Postgres + Redis), the reported version, register, the
- * guarded create endpoint, a refused destination, the redirect (cache miss then hit), a bot that is
- * redirected but not counted as a click, an unknown-code 404, the Prometheus
- * /metrics counters, and the refresh-session lifecycle (rotate, a racing tab
- * converges, logout revokes). Exits non-zero on the first failed check.
+ * guarded create endpoint, email verification, a refused destination, the redirect (cache miss then
+ * hit), a bot that is redirected but not counted as a click, an unknown-code 404, the Prometheus
+ * /metrics counters, the refresh-session lifecycle (rotate, a racing tab converges, logout
+ * revokes) and a password reset. Exits non-zero on the first failed check.
+ *
+ * The app must send its email to a Mailpit instance whose HTTP API is at MAILPIT_URL; the
+ * verification and reset links are read from there.
  *
  *   node dist/src/main &
- *   BASE_URL=http://localhost:3000 pnpm smoke
+ *   BASE_URL=http://localhost:3000 MAILPIT_URL=http://localhost:8025 pnpm smoke
  */
 
 const BASE_URL = (process.env.BASE_URL ?? process.env.SHORT_URL_BASE ?? 'http://localhost:3000').replace(/\/+$/, '')
@@ -17,6 +20,8 @@ const API_PREFIX = (process.env.API_PREFIX ?? 'api/v1').replace(/^\/+|\/+$/g, ''
 const BOOT_TIMEOUT_MS = Number(process.env.SMOKE_BOOT_TIMEOUT_MS ?? 60_000)
 const REDIRECT_STATUS = Number(process.env.REDIRECT_STATUS ?? 302)
 const CLICKS_TIMEOUT_MS = Math.max(15_000, 3 * Number(process.env.CLICKS_FLUSH_INTERVAL_MS ?? 5000))
+const MAILPIT_URL = (process.env.MAILPIT_URL ?? 'http://localhost:8025').replace(/\/+$/, '')
+const MAIL_TIMEOUT_MS = 15_000
 
 const BROWSER_UA =
   'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0 Safari/537.36'
@@ -59,6 +64,29 @@ function readRefreshCookie(res: Response): string | null {
     }
   }
   return null
+}
+
+/** Token of the newest email to `to` whose link points at `path`, read from Mailpit. */
+async function emailedToken(to: string, path: string): Promise<string> {
+  const pattern = new RegExp(`${path}\\?token=([\\w-]+)`)
+  const deadline = Date.now() + MAIL_TIMEOUT_MS
+  let lastError = 'no matching email'
+  while (Date.now() < deadline) {
+    try {
+      const search = await fetch(`${MAILPIT_URL}/api/v1/search?query=${encodeURIComponent(`to:"${to}"`)}`)
+      const { messages = [] } = (await search.json()) as { messages?: { ID: string }[] }
+      for (const { ID } of messages) {
+        const message = (await (await fetch(`${MAILPIT_URL}/api/v1/message/${ID}`)).json()) as { Text?: string }
+        const token = pattern.exec(message.Text ?? '')?.[1]
+        if (token) return token
+      }
+    } catch (error: unknown) {
+      lastError = error instanceof Error ? error.message : String(error)
+    }
+    await sleep(500)
+  }
+  assert(false, `an email to ${to} with a ${path} link reached Mailpit at ${MAILPIT_URL}`, lastError)
+  throw new Error('unreachable')
 }
 
 async function waitForBoot(): Promise<void> {
@@ -141,6 +169,32 @@ async function main(): Promise<void> {
       body: JSON.stringify({ url: 'https://example.com/anon' }),
     })
     assert(res.status === 401, `POST /${API_PREFIX}/urls without a token -> 401 (got ${res.status})`)
+  }
+
+  // Until the address is confirmed, creating links is refused.
+  {
+    const res = await fetch(apiUrl('urls'), {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${accessToken}` },
+      body: JSON.stringify({ url: 'https://example.com/unverified' }),
+    })
+    const body = (await res.json().catch(() => ({}))) as { code?: unknown }
+    assert(res.status === 403, `POST /${API_PREFIX}/urls before verification -> 403 (got ${res.status})`, body)
+    assert(body.code === 'EMAIL_NOT_VERIFIED', 'refusal carries code EMAIL_NOT_VERIFIED', body)
+  }
+
+  // Confirm the address with the link from the registration email.
+  {
+    const token = await emailedToken(credentials.email, '/verify-email')
+    pass('registration emailed a confirmation link')
+    const res = await fetch(apiUrl('auth/verify-email'), {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ token }),
+    })
+    const body = (await res.json().catch(() => ({}))) as { user?: { emailVerified?: unknown } }
+    assert(res.status === 200, `POST /${API_PREFIX}/auth/verify-email -> 200 (got ${res.status})`, body)
+    assert(body.user?.emailVerified === true, 'verify-email reports the address as confirmed', body)
   }
 
   // Create a short Link.
@@ -296,6 +350,37 @@ async function main(): Promise<void> {
     assert(
       afterLogoutRes.status === 401,
       `POST /${API_PREFIX}/auth/refresh after logout -> 401 (got ${afterLogoutRes.status})`,
+    )
+  }
+
+  // Password reset: the emailed link sets a new password, which then signs in.
+  {
+    const json = { 'content-type': 'application/json' }
+    const forgotRes = await fetch(apiUrl('auth/password/forgot'), {
+      method: 'POST',
+      headers: json,
+      body: JSON.stringify({ email: credentials.email }),
+    })
+    assert(forgotRes.status === 204, `POST /${API_PREFIX}/auth/password/forgot -> 204 (got ${forgotRes.status})`)
+
+    const token = await emailedToken(credentials.email, '/reset-password')
+    pass('password/forgot emailed a reset link')
+    const password = `${credentials.password}-reset`
+    const resetRes = await fetch(apiUrl('auth/password/reset'), {
+      method: 'POST',
+      headers: json,
+      body: JSON.stringify({ token, password }),
+    })
+    assert(resetRes.status === 204, `POST /${API_PREFIX}/auth/password/reset -> 204 (got ${resetRes.status})`)
+
+    const loginRes = await fetch(apiUrl('auth/login'), {
+      method: 'POST',
+      headers: json,
+      body: JSON.stringify({ email: credentials.email, password }),
+    })
+    assert(
+      loginRes.status === 200,
+      `POST /${API_PREFIX}/auth/login with the new password -> 200 (got ${loginRes.status})`,
     )
   }
 

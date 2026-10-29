@@ -1,5 +1,7 @@
 import type { NestFastifyApplication } from '@nestjs/platform-fastify'
 
+import { PrismaService } from '@/database/prisma.service'
+
 export const PASSWORD = 'correct horse battery'
 
 let counter = 0
@@ -30,8 +32,12 @@ export function refreshCookie(response: { cookies: { name: string; value: string
   return response.cookies.find((cookie) => cookie.name === 'refresh_token')?.value
 }
 
-/** Registers a fresh account and returns its tokens. */
-export async function register(app: NestFastifyApplication, email = uniqueEmail()): Promise<Session> {
+/** Registers a fresh account and returns its tokens. The address counts as confirmed unless `verified` is false. */
+export async function register(
+  app: NestFastifyApplication,
+  email = uniqueEmail(),
+  { verified = true }: { verified?: boolean } = {},
+): Promise<Session> {
   const response = await app.inject({
     method: 'POST',
     url: '/api/v1/auth/register',
@@ -46,9 +52,20 @@ export async function register(app: NestFastifyApplication, email = uniqueEmail(
   const refreshToken = refreshCookie(response)
   if (!refreshToken) throw new Error('register set no refresh_token cookie')
 
+  if (verified) {
+    await app.get(PrismaService).user.update({ where: { id: body.user.id }, data: { emailVerifiedAt: new Date() } })
+  }
+
   return { userId: body.user.id, email: body.user.email, accessToken: body.accessToken, refreshToken }
 }
 
 export function bearer(session: Session): { authorization: string } {
   return { authorization: `Bearer ${session.accessToken}` }
+}
+
+/** The `token` query parameter of the first link in an email's text. */
+export function linkToken(message: { text: string }): string {
+  const token = /[?&]token=([\w-]+)/.exec(message.text)?.[1]
+  if (!token) throw new Error(`no token link in email:\n${message.text}`)
+  return token
 }

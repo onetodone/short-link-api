@@ -17,13 +17,17 @@ import type { FastifyReply, FastifyRequest } from 'fastify'
 import { API_PREFIX } from '@/common/api-prefix'
 import { parseDurationSeconds } from '@/common/duration.util'
 import { AuthService } from '@/modules/auth/auth.service'
-import type { AuthResponse, AuthResult, RequestContext } from '@/modules/auth/auth.types'
+import type { AuthProfile, AuthResponse, AuthResult, AuthUser, RequestContext } from '@/modules/auth/auth.types'
 import { CurrentUser } from '@/modules/auth/current-user.decorator'
+import { ForgotPasswordDto } from '@/modules/auth/dto/forgot-password.dto'
 import { LoginDto } from '@/modules/auth/dto/login.dto'
 import { RegisterDto } from '@/modules/auth/dto/register.dto'
+import { ResetPasswordDto } from '@/modules/auth/dto/reset-password.dto'
+import { VerifyEmailDto } from '@/modules/auth/dto/verify-email.dto'
 import { JwtAuthGuard } from '@/modules/auth/jwt-auth.guard'
 import { UserAgent } from '@/modules/auth/user-agent.decorator'
 import { UserIp } from '@/modules/auth/user-ip.decorator'
+import { VerificationService } from '@/modules/auth/verification.service'
 
 const REFRESH_COOKIE = 'refresh_token'
 const DEFAULT_REFRESH_MAX_AGE_SECONDS = 7 * 24 * 60 * 60
@@ -38,6 +42,7 @@ export class AuthController {
 
   constructor(
     private readonly auth: AuthService,
+    private readonly verification: VerificationService,
     config: ConfigService,
   ) {
     this.cookiePath = `/${API_PREFIX}/auth`
@@ -114,8 +119,43 @@ export class AuthController {
 
   @Get('me')
   @UseGuards(JwtAuthGuard)
-  me(@CurrentUser('id') userId: string): Promise<{ id: string; email: string; createdAt: Date }> {
+  me(@CurrentUser('id') userId: string): Promise<AuthProfile> {
     return this.auth.profile(userId)
+  }
+
+  @Post('verify-email')
+  @HttpCode(HttpStatus.OK)
+  @Throttle(CREDENTIALS_THROTTLE)
+  async verifyEmail(@Body() dto: VerifyEmailDto): Promise<{ user: AuthUser }> {
+    return { user: await this.verification.verifyEmail(dto.token) }
+  }
+
+  @Post('verify-email/resend')
+  @HttpCode(HttpStatus.NO_CONTENT)
+  @UseGuards(JwtAuthGuard)
+  @Throttle(CREDENTIALS_THROTTLE)
+  resendVerification(@CurrentUser('id') userId: string): Promise<void> {
+    return this.verification.resendVerification(userId)
+  }
+
+  @Post('password/forgot')
+  @HttpCode(HttpStatus.NO_CONTENT)
+  @Throttle(CREDENTIALS_THROTTLE)
+  forgotPassword(@Body() dto: ForgotPasswordDto): void {
+    this.verification.requestPasswordReset(dto.email)
+  }
+
+  @Post('password/reset')
+  @HttpCode(HttpStatus.NO_CONTENT)
+  @Throttle(CREDENTIALS_THROTTLE)
+  async resetPassword(
+    @Body() dto: ResetPasswordDto,
+    @UserIp() ip: string | undefined,
+    @UserAgent() userAgent: string | undefined,
+    @Res({ passthrough: true }) reply: FastifyReply,
+  ): Promise<void> {
+    await this.verification.resetPassword(dto.token, dto.password, { ip, userAgent })
+    reply.clearCookie(REFRESH_COOKIE, { path: this.cookiePath })
   }
 
   private finish(reply: FastifyReply, result: AuthResult): AuthResponse {

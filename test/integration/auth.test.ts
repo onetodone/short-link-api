@@ -39,7 +39,7 @@ describe('POST /api/v1/auth/register', () => {
     expect(response.statusCode).toBe(201)
     const body = response.json<Record<string, unknown>>()
     expect(body).toEqual({
-      user: { id: expect.any(String), email: 'new@example.com' },
+      user: { id: expect.any(String), email: 'new@example.com', emailVerified: false },
       accessToken: expect.any(String),
     })
     expect(body).not.toHaveProperty('refreshToken')
@@ -137,7 +137,12 @@ describe('GET /api/v1/auth/me', () => {
     const session = await register(t.app)
     const response = await t.app.inject({ method: 'GET', url: '/api/v1/auth/me', headers: bearer(session) })
     expect(response.statusCode).toBe(200)
-    expect(response.json()).toEqual({ id: session.userId, email: session.email, createdAt: expect.any(String) })
+    expect(response.json()).toEqual({
+      id: session.userId,
+      email: session.email,
+      emailVerified: true,
+      createdAt: expect.any(String),
+    })
   })
 
   it.each([undefined, 'Bearer not-a-jwt', 'Basic abc'])('rejects authorization %s', async (authorization) => {

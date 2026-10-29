@@ -135,8 +135,21 @@ jobs:
           --health-timeout 5s
           --health-retries 10
 
-    # The app validates env at boot; only CORS_ORIGIN, DATABASE_URL and JWT_SECRET
-    # are required — every other key has a default in src/config/*.
+      # Catches the app's email; the smoke test reads the verification and reset links from its API.
+      mailpit:
+        image: axllent/mailpit:v1.30.7
+        ports:
+          - 1025:1025
+          - 8025:8025
+        options: >-
+          --health-cmd "/mailpit readyz"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+
+    # The app validates env at boot; CORS_ORIGIN, DATABASE_URL, JWT_SECRET, APP_URL,
+    # SUPPORT_EMAIL, SMTP_HOST, SMTP_PORT and a sender address are required — every
+    # other key has a default in src/config/env.ts.
     env:
       DATABASE_URL: postgresql://postgres:postgres@localhost:5432/short_url?schema=public
       CORS_ORIGIN: '*'
@@ -149,6 +162,12 @@ jobs:
       REDIRECT_STATUS: '302'
       URL_CREATE_DAILY_LIMIT: '10'
       CLICKS_FLUSH_INTERVAL_MS: '1000'
+      APP_URL: http://localhost:3001
+      SUPPORT_EMAIL: support@example.com
+      SMTP_HOST: localhost
+      SMTP_PORT: '1025'
+      SMTP_FROM_EMAIL: noreply@example.com
+      SMTP_FROM_NAME: Short Link CI
 
     steps:
       - uses: actions/checkout@v7
@@ -185,6 +204,7 @@ jobs:
           # info keeps the per-request completion logs — useful when a smoke check fails.
           LOG_LEVEL: info
           BASE_URL: http://localhost:3000
+          MAILPIT_URL: http://localhost:8025
           SMOKE_BOOT_TIMEOUT_MS: '60000'
         run: |
           node dist/src/main > "$RUNNER_TEMP/app.log" 2>&1 &
