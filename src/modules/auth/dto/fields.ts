@@ -19,3 +19,8 @@ export const newPasswordField = z
   .max(MAX_PASSWORD_LENGTH, `Password must be at most ${MAX_PASSWORD_LENGTH} characters`)
 
 export const tokenField = z.string().min(1, 'Token is required').max(MAX_TOKEN_LENGTH, 'Token is invalid')
+
+export const currentPasswordField = z
+  .string()
+  .min(1, 'Password is required')
+  .max(MAX_PASSWORD_LENGTH, `Password must be at most ${MAX_PASSWORD_LENGTH} characters`)

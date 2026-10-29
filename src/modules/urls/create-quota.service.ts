@@ -27,7 +27,7 @@ export class CreateQuotaService {
   async consume(userId: string): Promise<void> {
     if (this.limit === 0) return
 
-    const key = `quota:create:${userId}`
+    const key = this.key(userId)
     let count: number
     let ttlSeconds: number
     try {
@@ -42,5 +42,17 @@ export class CreateQuotaService {
     if (count > this.limit) {
       throw new CreateQuotaExceededException(this.limit, Math.max(ttlSeconds, 1))
     }
+  }
+
+  async forget(userId: string): Promise<void> {
+    try {
+      await this.redis.del(this.key(userId))
+    } catch (error) {
+      this.logger.warn(`Failed to drop create quota of user ${userId}: ${(error as Error).message}`)
+    }
+  }
+
+  private key(userId: string): string {
+    return `quota:create:${userId}`
   }
 }

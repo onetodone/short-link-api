@@ -8,6 +8,7 @@ import { InjectRedis } from '@/redis/redis.constants'
 
 const COUNTER_PREFIX = 'clicks:'
 const DIRTY_SET = 'clicks:dirty'
+const REDIS_BATCH = 500
 
 interface ClickDelta {
   shortCode: string
@@ -57,11 +58,18 @@ export class ClicksService implements OnModuleInit, OnModuleDestroy {
       })
   }
 
-  async discard(shortCode: string): Promise<void> {
-    try {
-      await this.redis.multi().del(`${COUNTER_PREFIX}${shortCode}`).srem(DIRTY_SET, shortCode).exec()
-    } catch (error) {
-      this.logger.warn(`Failed to discard click buffer for "${shortCode}": ${(error as Error).message}`)
+  async discard(shortCodes: string[]): Promise<void> {
+    for (let start = 0; start < shortCodes.length; start += REDIS_BATCH) {
+      const batch = shortCodes.slice(start, start + REDIS_BATCH)
+      try {
+        await this.redis
+          .multi()
+          .del(...batch.map((shortCode) => `${COUNTER_PREFIX}${shortCode}`))
+          .srem(DIRTY_SET, ...batch)
+          .exec()
+      } catch (error) {
+        this.logger.warn(`Failed to discard click buffer for ${batch.length} code(s): ${(error as Error).message}`)
+      }
     }
   }
 

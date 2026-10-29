@@ -1,5 +1,8 @@
 import { describe, expect, it } from 'vitest'
 
+import { changeEmailSchema } from '@/modules/account/dto/change-email.dto'
+import { changePasswordSchema } from '@/modules/account/dto/change-password.dto'
+import { deleteAccountSchema } from '@/modules/account/dto/delete-account.dto'
 import { forgotPasswordSchema } from '@/modules/auth/dto/forgot-password.dto'
 import { loginSchema } from '@/modules/auth/dto/login.dto'
 import { registerSchema } from '@/modules/auth/dto/register.dto'
@@ -94,5 +97,29 @@ describe('account email schemas', () => {
     expect(resetPasswordSchema.safeParse({ token: 'abc', password: 'password1' }).success).toBe(true)
     expect(resetPasswordSchema.safeParse({ token: 'abc', password: 'short' }).success).toBe(false)
     expect(resetPasswordSchema.safeParse({ token: 'abc', password: 'x'.repeat(129) }).success).toBe(false)
+  })
+})
+
+describe('account management schemas', () => {
+  it('holds a changed password to the registration rules and requires the current one', () => {
+    expect(changePasswordSchema.safeParse({ currentPassword: 'x', newPassword: 'password1' }).success).toBe(true)
+    expect(changePasswordSchema.safeParse({ currentPassword: '', newPassword: 'password1' }).success).toBe(false)
+    expect(changePasswordSchema.safeParse({ currentPassword: 'x', newPassword: 'short' }).success).toBe(false)
+    expect(changePasswordSchema.safeParse({ newPassword: 'password1' }).success).toBe(false)
+  })
+
+  it('normalises the new email and requires the password', () => {
+    expect(changeEmailSchema.parse({ newEmail: ' A@B.CO ', password: 'x' })).toEqual({
+      newEmail: 'a@b.co',
+      password: 'x',
+    })
+    expect(changeEmailSchema.safeParse({ newEmail: 'not-an-email', password: 'x' }).success).toBe(false)
+    expect(changeEmailSchema.safeParse({ newEmail: 'a@b.co' }).success).toBe(false)
+  })
+
+  it('requires a password of sane length to delete the account', () => {
+    expect(deleteAccountSchema.safeParse({ password: 'x' }).success).toBe(true)
+    expect(deleteAccountSchema.safeParse({ password: '' }).success).toBe(false)
+    expect(deleteAccountSchema.safeParse({ password: 'x'.repeat(129) }).success).toBe(false)
   })
 })

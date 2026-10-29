@@ -45,3 +45,18 @@ export class EmailCooldownException extends HttpException {
     )
   }
 }
+
+/** `403` with `code: INVALID_PASSWORD`: the confirming password of a signed-in account is wrong. */
+export class InvalidPasswordException extends HttpException {
+  constructor() {
+    super(
+      {
+        statusCode: HttpStatus.FORBIDDEN,
+        message: 'Password is incorrect',
+        error: 'Forbidden',
+        code: 'INVALID_PASSWORD',
+      },
+      HttpStatus.FORBIDDEN,
+    )
+  }
+}

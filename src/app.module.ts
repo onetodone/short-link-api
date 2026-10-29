@@ -19,6 +19,7 @@ import { clientIp } from '@/common/trusted-proxy'
 import { PrismaModule } from '@/database/prisma.module'
 import { MailModule } from '@/mail/mail.module'
 import { RedisModule } from '@/redis/redis.module'
+import { AccountModule } from '@/modules/account/account.module'
 import { AuthModule } from '@/modules/auth/auth.module'
 import { HealthModule } from '@/modules/health/health.module'
 import { MetricsModule } from '@/modules/metrics/metrics.module'
@@ -54,6 +55,7 @@ import { AppController } from '@/app.controller'
     AuthModule,
     HealthModule,
     UrlsModule,
+    AccountModule,
   ],
   controllers: [AppController],
   providers: [{ provide: APP_GUARD, useClass: ThrottlerGuard }],
