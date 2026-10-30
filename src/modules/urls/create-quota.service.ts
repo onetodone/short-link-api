@@ -6,6 +6,7 @@ import { CreateQuotaExceededException } from '@/modules/urls/urls.errors'
 import { InjectRedis } from '@/redis/redis.constants'
 
 const WINDOW_SECONDS = 24 * 60 * 60
+const REFUND_SCRIPT = "if redis.call('EXISTS', KEYS[1]) == 1 then return redis.call('DECR', KEYS[1]) end return 0"
 
 @Injectable()
 export class CreateQuotaService {
@@ -41,6 +42,18 @@ export class CreateQuotaService {
 
     if (count > this.limit) {
       throw new CreateQuotaExceededException(this.limit, Math.max(ttlSeconds, 1))
+    }
+  }
+
+  /** Gives back a creation counted by `consume` that didn't happen. A Redis failure is only logged. */
+  async refund(userId: string): Promise<void> {
+    if (this.limit === 0) return
+
+    try {
+      // An expired window has nothing to give back; a bare DECR would recreate the key without a TTL.
+      await this.redis.eval(REFUND_SCRIPT, 1, this.key(userId))
+    } catch (error) {
+      this.logger.warn(`Failed to refund create quota of user ${userId}: ${(error as Error).message}`)
     }
   }
 

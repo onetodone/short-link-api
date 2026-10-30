@@ -18,16 +18,18 @@ enum UrlDisabledReason {
 }
 
 model Url {
-  id             String             @id @default(uuid()) @db.Uuid
-  originalUrl    String
-  note           String?            @db.VarChar(200)
-  shortCode      String             @unique // Postgres backs @unique with a B-Tree index — the fast-lookup path
-  clicks         Int                @default(0)
-  userId         String?            @db.Uuid
-  disabledAt     DateTime?
-  disabledReason UrlDisabledReason?
-  createdAt      DateTime           @default(now())
-  updatedAt      DateTime           @default(now()) @updatedAt
+  id                   String             @id @default(uuid()) @db.Uuid
+  originalUrl          String
+  note                 String?            @db.VarChar(200)
+  shortCode            String             @unique // Postgres backs @unique with a B-Tree index — the fast-lookup path
+  clicks               Int                @default(0)
+  userId               String?            @db.Uuid
+  disabledAt           DateTime?
+  disabledReason       UrlDisabledReason?
+  destinationSetAt     DateTime           @default(now())
+  destinationCheckedAt DateTime?
+  createdAt            DateTime           @default(now())
+  updatedAt            DateTime           @default(now()) @updatedAt
 
   user User? @relation(fields: [userId], references: [id], onDelete: Cascade)
 

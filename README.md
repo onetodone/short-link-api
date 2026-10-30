@@ -1,7 +1,7 @@
 # Short Link API
 
 [![CI Status](https://github.com/onetodone/short-link-api/actions/workflows/ci.yml/badge.svg)](https://github.com/onetodone/short-link-api/actions/workflows/ci.yml)
-[![Version](https://img.shields.io/badge/version-1.7.0-blue.svg)](./package.json)
+[![Version](https://img.shields.io/badge/version-1.8.0-blue.svg)](./package.json)
 [![pnpm](https://img.shields.io/badge/pnpm-v12-F69220?logo=pnpm&logoColor=white)](https://pnpm.io/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](./LICENSE)
 
@@ -24,6 +24,7 @@ a database write.
 - **Email:** [`@onetodone/mailer`](https://github.com/onetodone/mailer) over SMTP (`nodemailer`) — address verification, password reset, account notices, moderation notices
 - **Observability:** `nestjs-pino` structured logs, Prometheus `/metrics`, `/health` + `/health/ready`
 - **Rate limiting:** `@nestjs/throttler` (in-memory, per-IP)
+- **Link safety:** destination rules, Google Safe Browsing checks on save and after redirects, operator moderation commands
 
 ---
 
@@ -35,18 +36,23 @@ POST /api/v1/urls                       GET /:shortCode
   ThrottlerGuard (global)                 code regex guard  -> 404 on junk
   ZodValidationPipe                       UrlsService.resolve(code)
   UrlsService.create()                      1. in-process Promise dedupe map
-    generateShortCode (async CSPRNG)        2. Redis GET  -> hit / negative sentinel
-    prisma.url.create (retry on P2002)      3. miss: SET NX lock -> prisma.findUnique
+    destination rules, quota                2. Redis GET  -> hit / negative sentinel
+    Safe Browsing lookup -> 422 unsafe      3. miss: SET NX lock -> prisma.findUnique
+    generateShortCode (async CSPRNG)
+    prisma.url.create (retry on P2002)
   -> 201 { shortCode, shortUrl, ... }              -> SET EX (url | "disabled" | "not-found")
                                           disabled: -> 302 ${APP_URL}/link-disabled (no click)
                                           isHumanClick(method, headers)
                                             yes: ClicksService.increment(code)  (fire-and-forget)
                                             no:  http_redirects_bot_total++
+                                          DestinationChecksService.schedule(code)  (in-memory queue)
                                          -> 302 Location: <originalUrl>
                                             Cache-Control: private, max-age=0
 
 ClicksService: INCR shortlink:clicks:{code} + SADD shortlink:clicks:dirty
                setInterval(flush): GETDEL each dirty code -> one prisma.$transaction of updateMany
+DestinationChecksService: SET NX shortlink:sb:{code} -> due? -> Safe Browsing lookup
+               flagged: ModerationService.disableLink(code, UNSAFE_DESTINATION)
 ```
 
 ---
@@ -59,6 +65,8 @@ ClicksService: INCR shortlink:clicks:{code} + SADD shortlink:clicks:dirty
   before running the migrations.
 - An **SMTP server** for account emails (`SMTP_*`). In development, a catcher such as
   [Mailpit](https://mailpit.axllent.org) on port `1025` keeps the emails local.
+- Optional: a **Google Safe Browsing API key** (`SAFE_BROWSING_API_KEY`) to check destinations
+  (see [Unsafe destinations](#unsafe-destinations)).
 
 ---
 
@@ -104,10 +112,10 @@ endpoints (`/health`, `/health/ready`, `/metrics`).
 | `POST /api/v1/auth/me/email`     | Bearer access token                  | `{ newEmail, password }`                                    | `204` — emails a confirmation link to the new address and a notice to the current one · `400` same address · `403 INVALID_PASSWORD` · `429 EMAIL_COOLDOWN` |
 | `POST /api/v1/auth/email/confirm` | –                                   | `{ token }`                                                 | `200 { user }` with the new address · `400 INVALID_TOKEN` · `409` address taken                                 |
 | `DELETE /api/v1/auth/me`         | Bearer access token                  | `{ password }`                                              | `204` — deletes the account and all its links · clears the cookie · `403 INVALID_PASSWORD`                      |
-| `POST /api/v1/urls`              | Bearer access token                  | `{ url, note? }` (`http`/`https`, ≤ 2048 chars; note ≤ 200) | `201 { shortCode, shortUrl, originalUrl, note, createdAt, updatedAt }` · `403` unconfirmed email or suspended account · `422` destination rule · `429` quota                                        |
+| `POST /api/v1/urls`              | Bearer access token                  | `{ url, note? }` (`http`/`https`, ≤ 2048 chars; note ≤ 200) | `201 { shortCode, shortUrl, originalUrl, note, createdAt, updatedAt }` · `403` unconfirmed email or suspended account · `422` destination rule or unsafe destination · `429` quota                                      |
 | `GET /api/v1/urls`               | Bearer access token                  | `?limit` (1–100, def. 20), `?offset` (≥ 0, def. 0)          | `200 { items[], total, limit, offset }` — caller's URLs, newest first                                           |
 | `GET /api/v1/urls/:shortCode`    | Bearer access token (**owner only**) | –                                                           | `200 { shortCode, shortUrl, originalUrl, note, clicks, disabled, disabledReason, createdAt, updatedAt }` · `404` unknown **or** not owner |
-| `PATCH /api/v1/urls/:shortCode`  | Bearer access token (**owner only**) | `{ url?, note? }` (at least one)                            | `200` — same body as `GET` · `403` unconfirmed email or suspended account · `404` unknown **or** not owner · `422` destination rule                                                   |
+| `PATCH /api/v1/urls/:shortCode`  | Bearer access token (**owner only**) | `{ url?, note? }` (at least one)                            | `200` — same body as `GET` · `403` unconfirmed email or suspended account · `404` unknown **or** not owner · `422` destination rule or unsafe destination                                                 |
 | `DELETE /api/v1/urls/:shortCode` | Bearer access token (**owner only**) | –                                                           | `204` · `404` unknown **or** not owner                                                                          |
 | `GET /:shortCode`                | –                                    | –                                                           | `302 Location: <originalUrl>` (`301` with `REDIRECT_STATUS=301`) · disabled: `302 ${APP_URL}/link-disabled` · `404` unknown / malformed |
 | `GET /`                          | –                                    | –                                                           | `302 Location: ${APP_URL}`                                                                                      |
@@ -226,7 +234,7 @@ and `disabledReason`:
 | `disabledReason`     | Set by                                       | Lifted by                                                     |
 | -------------------- | -------------------------------------------- | ------------------------------------------------------------- |
 | `MANUAL`             | `link:disable`                               | `link:enable` only — survives the owner's edits               |
-| `UNSAFE_DESTINATION` | `link:disable --unsafe`                      | `link:enable`, or the owner `PATCH`ing a different `url`      |
+| `UNSAFE_DESTINATION` | `link:disable --unsafe`, a Safe Browsing re-check | `link:enable`, or the owner `PATCH`ing a different `url` |
 | `ACCOUNT_SUSPENDED`  | `user:suspend`, on every link still enabled  | `user:unsuspend`, which re-enables exactly these links        |
 
 `user:suspend` revokes every session of the account. Signing in then answers `403` with
@@ -260,6 +268,33 @@ creation goes through.
 
 Error bodies keep Nest's `{ statusCode, message, error }` shape; these errors add a machine-readable
 `code`.
+
+### Unsafe destinations
+
+With `SAFE_BROWSING_API_KEY` set, destinations are looked up in
+[Google Safe Browsing](https://developers.google.com/safe-browsing) (v5 `urls:search`, 3 s timeout):
+
+- **On save** — `POST`, and `PATCH` with a different `url`, reject a flagged destination with `422`,
+  `code: "DESTINATION_REJECTED"` and `reason: "UNSAFE_DESTINATION"`; a rejected creation doesn't count
+  toward the quota. If the lookup fails or times out the link is saved and checked on its next
+  redirect.
+- **After redirects** — a redirect queues a re-check in memory and returns at once; it never waits on
+  Postgres or Google. A destination is due hourly during the first week after it was set
+  (`destinationSetAt`), daily after that (`destinationCheckedAt`), and at once if it was never
+  checked. Each instance asks Redis about a code at most every 5 minutes, and a `SET NX` key per code
+  (`sb:<code>`, expiring when the next check is due) lets one instance do the check. A failed lookup
+  still counts as the check, so an outage doesn't trigger a lookup on every redirect.
+- **Flagged later** — the link is disabled with `UNSAFE_DESTINATION` through the same path as
+  `link:disable --unsafe`: the cache key is evicted and the owner is emailed. Pointing the link to a
+  different destination enables it again; a `MANUAL` disable is never replaced.
+
+Without a key nothing is looked up and links are saved and redirected as usual; links saved meanwhile
+are checked on their first redirect once a key is set. Destination URLs are sent to Google as part of
+the lookup.
+
+To get a key, create a Google Cloud project, enable the **Safe Browsing API**, and create an API key
+restricted to that API. The Safe Browsing API is free for **non-commercial use only**; a commercial
+service needs [Web Risk](https://cloud.google.com/web-risk) instead.
 
 ### Click counting
 
@@ -336,6 +371,7 @@ the `env` object it exports. An invalid `.env` fails fast at startup.
 | `SHORT_CODE_MAX_RETRIES`                       | `5`                       | Collision retries before `503`                   |
 | `REDIRECT_STATUS`                              | `302`                     | `GET /:shortCode` status: `301` \| `302`         |
 | `URL_CREATE_DAILY_LIMIT`                       | `10`                      | Links per account per 24 h (`0` = no quota)      |
+| `SAFE_BROWSING_API_KEY`                        | –                         | Google Safe Browsing key; empty turns the checks off (see [Unsafe destinations](#unsafe-destinations)) |
 | `CACHE_TTL_SECONDS`                            | `3600`                    | Positive cache TTL                               |
 | `CACHE_NEGATIVE_TTL_SECONDS`                   | `60`                      | Negative (unknown-code) cache TTL                |
 | `CACHE_LOCK_TTL_MS`                            | `3000`                    | `SET NX` stampede-lock TTL                       |
@@ -370,6 +406,9 @@ the `env` object it exports. An invalid `.env` fails fast at startup.
   | `http_redirects_disabled_total` | requests for disabled links, sent to the link-disabled page |
   | `clicks_flushed_total`      | buffered clicks reconciled into Postgres                     |
   | `clicks_flush_errors_total` | flush cycles that failed and were re-buffered                |
+  | `safe_browsing_lookups_total` | destinations looked up in Safe Browsing                    |
+  | `safe_browsing_lookup_errors_total` | lookups that failed or timed out (destination let through) |
+  | `safe_browsing_flagged_total` | destinations flagged, rejected on save or disabled         |
   | `process_uptime_seconds`    | gauge, seconds since the registry was created                |
 
 - **Logs** — every request logs `method`, `url`, `remoteAddress`, `responseTime`, and `userId`
@@ -512,7 +551,7 @@ emits the decorator metadata Nest's dependency injection needs.
 - **Unit** (`test/unit/`) — pure logic: short-code generation, session token and hash helpers,
   duration parsing, env validation, the trusted-proxy rules, the request schemas, and the click filter
   and redirect status, the account-email and account-management request schemas, and the moderation
-  command and target parsing.
+  command and target parsing, and the Safe Browsing response decoding and re-check schedule.
 - **Integration** (`test/integration/`) — the whole application, built by the same `createApp()` as
   `main.ts` and driven through Fastify's `inject()`, against real Postgres and Redis: registration,
   login, throttling, refresh rotation with the grace window and reuse revocation, logout, URL CRUD
@@ -521,8 +560,10 @@ emits the decorator metadata Nest's dependency injection needs.
   email verification and its gate on link creation, password reset with session revocation, resend
   and reset cooldowns, token expiry and sweeping, password and email changes, account deletion with
   its links and their cache keys, link moderation and account suspension through the operator commands,
-  and the ops endpoints. The tests replace the SMTP
-  transport with one that records each email, and read the links from it.
+  Safe Browsing checks on save and after redirects, and the ops endpoints. The tests replace the SMTP
+  transport with one that records each email, and read the links from it. Safe Browsing is off in the
+  tests; `test/integration/safe-browsing.test.ts` turns it on with a stand-in for the Google API
+  (`test/safe-browsing-double.ts`), so no test reaches Google.
 
 Integration tests empty every table and every Redis key under their prefix, so they use a database
 whose name ends in `_test` — `TEST_DATABASE_URL`, or by default the database of `DATABASE_URL` with
@@ -569,7 +610,7 @@ src/
   redis/                     tuned ioredis client + @Global module + InjectRedis()
   mail/                      MailerModule from @onetodone/mailer/nestjs over the SMTP transport + MailService (background sends of the account and moderation emails) + the moderation templates
   modules/
-    urls/                    create + list + get + update + delete + resolve, short-code CSPRNG, destination rules + shortener list, creation quota, click buffer, redirect controller + bot/prefetch click filter
+    urls/                    create + list + get + update + delete + resolve, short-code CSPRNG, destination rules + shortener list, Safe Browsing client + re-check queue, creation quota, click buffer, redirect controller + bot/prefetch click filter
     moderation/              disable / enable links, suspend / restore accounts, with cache eviction and owner emails
     account/                 password change, email change + confirmation, account deletion with its links and cache keys
     auth/                    bcrypt, access-JWT issue/verify, rotating refresh sessions + reuse detection, logout, email verification + gate, password reset, email cooldowns, hourly sweep
@@ -587,6 +628,7 @@ scripts/
 test/
   unit/                      pure-logic tests
   integration/               whole-app tests against Postgres + Redis (helpers/ boots the app, resets state)
+  safe-browsing-double.ts    stand-in for the Safe Browsing API, shared by both projects
 ```
 
 ---

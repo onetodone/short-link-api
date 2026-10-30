@@ -17,6 +17,12 @@ const COUNTERS: readonly CounterMeta[] = [
   },
   { name: 'clicks_flushed_total', help: 'Buffered clicks reconciled into Postgres by the flush cycle' },
   { name: 'clicks_flush_errors_total', help: 'Click-buffer flush cycles that failed and were re-buffered' },
+  { name: 'safe_browsing_lookups_total', help: 'Destinations looked up in Google Safe Browsing' },
+  {
+    name: 'safe_browsing_lookup_errors_total',
+    help: 'Safe Browsing lookups that failed or timed out; the destination was let through',
+  },
+  { name: 'safe_browsing_flagged_total', help: 'Destinations Safe Browsing flagged, rejected on save or disabled' },
 ] as const
 
 @Injectable()
