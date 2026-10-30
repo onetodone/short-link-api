@@ -207,4 +207,11 @@ describe('ops endpoints', () => {
     const response = await t.app.inject({ method: 'GET', url: '/api/v1' })
     expect(response.json()).toEqual({ name: 'short-link-api', version: packageJson.version })
   })
+
+  it('serves the public config with Turnstile off', async () => {
+    const response = await t.app.inject({ method: 'GET', url: '/api/v1/config' })
+    expect(response.statusCode).toBe(200)
+    expect(response.headers['cache-control']).toBe('public, max-age=300')
+    expect(response.json()).toEqual({ turnstileSiteKey: null, oauthProviders: [] })
+  })
 })
