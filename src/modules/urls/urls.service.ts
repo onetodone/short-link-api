@@ -8,21 +8,26 @@ import { InjectRedis } from '@/redis/redis.constants'
 import { ClicksService } from '@/modules/urls/clicks.service'
 import { CreateQuotaService } from '@/modules/urls/create-quota.service'
 import { destinationRejection, hostnameOf } from '@/modules/urls/destination-rules'
+import { evictUrls, urlCacheKey } from '@/modules/urls/url-cache'
 import { DestinationRejectedException } from '@/modules/urls/urls.errors'
 import { CreatedUrl, ListUrlsOptions, NewUrl, UrlChanges, UrlList, UrlSummary } from '@/modules/urls/urls.types'
 import { generateShortCode } from '@/modules/urls/short-code.util'
-import { Prisma } from '@prisma-client'
+import { Prisma, UrlDisabledReason } from '@prisma-client'
+
+/** What `UrlsService.resolve` returns, and the cache holds, for a disabled link. */
+export const LINK_DISABLED = 'disabled'
 
 const NEGATIVE_SENTINEL = 'not-found'
 const LOCK_WAIT_ATTEMPTS = 5
 const LOCK_WAIT_INTERVAL_MS = 40
-const EVICT_BATCH = 500
 
 const URL_SUMMARY_SELECT = {
   shortCode: true,
   originalUrl: true,
   note: true,
   clicks: true,
+  disabledAt: true,
+  disabledReason: true,
   createdAt: true,
   updatedAt: true,
 } satisfies Prisma.UrlSelect
@@ -141,10 +146,24 @@ export class UrlsService {
     }
 
     try {
-      const record = await this.prisma.url.update({
-        where: { shortCode, userId },
-        data: { originalUrl: changes.url, note: changes.note },
-        select: URL_SUMMARY_SELECT,
+      const record = await this.prisma.$transaction(async (tx) => {
+        if (changes.url !== undefined) {
+          // A new destination clears an unsafe-destination flag; a manual or suspension disable stays.
+          await tx.url.updateMany({
+            where: {
+              shortCode,
+              userId,
+              disabledReason: UrlDisabledReason.UNSAFE_DESTINATION,
+              originalUrl: { not: changes.url },
+            },
+            data: { disabledAt: null, disabledReason: null },
+          })
+        }
+        return tx.url.update({
+          where: { shortCode, userId },
+          data: { originalUrl: changes.url, note: changes.note },
+          select: URL_SUMMARY_SELECT,
+        })
       })
 
       if (changes.url !== undefined) {
@@ -180,14 +199,7 @@ export class UrlsService {
 
   /** Drops the cached destinations and unflushed clicks of deleted short codes. Never throws. */
   async forget(shortCodes: string[]): Promise<void> {
-    for (let start = 0; start < shortCodes.length; start += EVICT_BATCH) {
-      const keys = shortCodes.slice(start, start + EVICT_BATCH).map((shortCode) => this.urlKey(shortCode))
-      try {
-        await this.redis.del(...keys)
-      } catch (error) {
-        this.logger.warn(`Failed to evict cache for ${keys.length} code(s): ${(error as Error).message}`)
-      }
-    }
+    await evictUrls(this.redis, shortCodes, this.logger)
     await this.clicks.discard(shortCodes)
   }
 
@@ -205,6 +217,8 @@ export class UrlsService {
       originalUrl: row.originalUrl,
       note: row.note,
       clicks: row.clicks,
+      disabled: row.disabledAt !== null,
+      disabledReason: row.disabledReason,
       createdAt: row.createdAt,
       updatedAt: row.updatedAt,
     }
@@ -217,14 +231,14 @@ export class UrlsService {
     throw error
   }
 
-  private async evictFromCache(shortCode: string): Promise<void> {
-    try {
-      await this.redis.del(this.urlKey(shortCode))
-    } catch (error) {
-      this.logger.warn(`Failed to evict cache for "${shortCode}": ${(error as Error).message}`)
-    }
+  private evictFromCache(shortCode: string): Promise<void> {
+    return evictUrls(this.redis, [shortCode], this.logger)
   }
 
+  /**
+   * The destination of `shortCode`, or `LINK_DISABLED`. Throws `NotFoundException` for an unknown
+   * code. Concurrent misses for one code share a single database read.
+   */
   async resolve(shortCode: string): Promise<string> {
     const cached = await this.readCache(shortCode)
     if (cached !== null) {
@@ -251,7 +265,7 @@ export class UrlsService {
 
   private async readCache(shortCode: string): Promise<string | null> {
     try {
-      return await this.redis.get(this.urlKey(shortCode))
+      return await this.redis.get(urlCacheKey(shortCode))
     } catch (error) {
       this.logger.warn(`Redis GET failed for "${shortCode}": ${(error as Error).message}`)
       return null
@@ -274,16 +288,17 @@ export class UrlsService {
     try {
       const record = await this.prisma.url.findUnique({
         where: { shortCode },
-        select: { originalUrl: true },
+        select: { originalUrl: true, disabledAt: true },
       })
 
       if (!record) {
-        await this.writeCache(this.urlKey(shortCode), NEGATIVE_SENTINEL, this.negativeTtlSeconds)
+        await this.writeCache(urlCacheKey(shortCode), NEGATIVE_SENTINEL, this.negativeTtlSeconds)
         throw new NotFoundException('Short code not found')
       }
 
-      await this.writeCache(this.urlKey(shortCode), record.originalUrl, this.ttlSeconds)
-      return record.originalUrl
+      const target = record.disabledAt === null ? record.originalUrl : LINK_DISABLED
+      await this.writeCache(urlCacheKey(shortCode), target, this.ttlSeconds)
+      return target
     } finally {
       if (lock === true) {
         void this.releaseLock(shortCode)
@@ -329,10 +344,6 @@ export class UrlsService {
 
   private isUniqueViolation(error: unknown): boolean {
     return error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002'
-  }
-
-  private urlKey(shortCode: string): string {
-    return `url:${shortCode}`
   }
 
   private lockKey(shortCode: string): string {
