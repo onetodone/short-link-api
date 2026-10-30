@@ -84,24 +84,33 @@ export class ModerationService {
 
   /**
    * Disables `shortCode` for `reason`. A manual disable replaces any other reason; an unsafe-destination
-   * disable never replaces a manual one, so the owner can't lift it by editing the link.
+   * disable never replaces a manual one, so the owner can't lift it by editing the link. With
+   * `destination`, the link is left alone unless it still leads there.
    */
-  async disableLink(shortCode: string, reason: DisableReason): Promise<LinkOutcome> {
+  async disableLink(
+    shortCode: string,
+    reason: DisableReason,
+    { destination }: { destination?: string } = {},
+  ): Promise<LinkOutcome> {
     const url = await this.findLink(shortCode)
     const ownerEmail = url.user?.email ?? null
+    const unchanged = { shortCode, changed: false, disabledReason: url.disabledReason, ownerEmail }
 
     const keeps =
       url.disabledReason === reason ||
-      (reason === UrlDisabledReason.UNSAFE_DESTINATION && url.disabledReason === UrlDisabledReason.MANUAL)
+      (reason === UrlDisabledReason.UNSAFE_DESTINATION && url.disabledReason === UrlDisabledReason.MANUAL) ||
+      (destination !== undefined && url.originalUrl !== destination)
     if (keeps) {
-      return { shortCode, changed: false, disabledReason: url.disabledReason, ownerEmail }
+      return unchanged
     }
 
-    await this.prisma.url.update({
-      where: { shortCode },
+    const updated = await this.prisma.url.updateMany({
+      where: { shortCode, originalUrl: destination },
       data: { disabledAt: url.disabledAt ?? new Date(), disabledReason: reason },
-      select: { id: true },
     })
+    if (updated.count === 0) {
+      return unchanged
+    }
     await evictUrls(this.redis, [shortCode], this.logger)
     this.logger.log(`Link "${shortCode}" disabled (${reason})`)
 
@@ -203,7 +212,12 @@ export class ModerationService {
   private async findLink(shortCode: string) {
     const url = await this.prisma.url.findUnique({
       where: { shortCode },
-      select: { disabledAt: true, disabledReason: true, user: { select: { email: true, suspendedAt: true } } },
+      select: {
+        originalUrl: true,
+        disabledAt: true,
+        disabledReason: true,
+        user: { select: { email: true, suspendedAt: true } },
+      },
     })
     if (!url) {
       throw new ModerationError(`No link with the short code "${shortCode}"`)

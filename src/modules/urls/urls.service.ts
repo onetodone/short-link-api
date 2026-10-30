@@ -7,7 +7,9 @@ import { MetricsService } from '@/modules/metrics/metrics.service'
 import { InjectRedis } from '@/redis/redis.constants'
 import { ClicksService } from '@/modules/urls/clicks.service'
 import { CreateQuotaService } from '@/modules/urls/create-quota.service'
+import { DestinationChecksService } from '@/modules/urls/destination-checks.service'
 import { destinationRejection, hostnameOf } from '@/modules/urls/destination-rules'
+import { SafeBrowsingClient } from '@/modules/urls/safe-browsing.client'
 import { evictUrls, urlCacheKey } from '@/modules/urls/url-cache'
 import { DestinationRejectedException } from '@/modules/urls/urls.errors'
 import { CreatedUrl, ListUrlsOptions, NewUrl, UrlChanges, UrlList, UrlSummary } from '@/modules/urls/urls.types'
@@ -56,6 +58,8 @@ export class UrlsService {
     private readonly metrics: MetricsService,
     private readonly clicks: ClicksService,
     private readonly quota: CreateQuotaService,
+    private readonly safeBrowsing: SafeBrowsingClient,
+    private readonly destinationChecks: DestinationChecksService,
     config: ConfigService,
   ) {
     this.codeLength = config.get<number>('shortener.codeLength', 7)
@@ -73,12 +77,22 @@ export class UrlsService {
       await this.quota.consume(userId)
     }
 
+    let destinationCheckedAt: Date | null
+    try {
+      destinationCheckedAt = await this.checkDestination(originalUrl)
+    } catch (error) {
+      if (userId !== null) {
+        await this.quota.refund(userId)
+      }
+      throw error
+    }
+
     for (let attempt = 1; attempt <= this.maxRetries; attempt += 1) {
       const shortCode = await generateShortCode(this.codeLength)
 
       try {
         const record = await this.prisma.url.create({
-          data: { originalUrl, note, shortCode, userId },
+          data: { originalUrl, note, shortCode, userId, destinationCheckedAt },
           select: { shortCode: true, originalUrl: true, note: true, createdAt: true, updatedAt: true },
         })
 
@@ -141,8 +155,17 @@ export class UrlsService {
   }
 
   async updateForUser(userId: string, shortCode: string, changes: UrlChanges): Promise<UrlSummary> {
+    let destination: Prisma.UrlUpdateInput = {}
     if (changes.url !== undefined) {
       this.assertAllowedDestination(changes.url)
+      const current = await this.prisma.url.findUnique({ where: { shortCode, userId }, select: { originalUrl: true } })
+      if (!current) {
+        throw new NotFoundException('Short code not found')
+      }
+      if (current.originalUrl !== changes.url) {
+        const destinationCheckedAt = await this.checkDestination(changes.url)
+        destination = { destinationSetAt: new Date(), destinationCheckedAt }
+      }
     }
 
     try {
@@ -161,13 +184,16 @@ export class UrlsService {
         }
         return tx.url.update({
           where: { shortCode, userId },
-          data: { originalUrl: changes.url, note: changes.note },
+          data: { originalUrl: changes.url, note: changes.note, ...destination },
           select: URL_SUMMARY_SELECT,
         })
       })
 
       if (changes.url !== undefined) {
         await this.evictFromCache(shortCode)
+      }
+      if (destination.destinationSetAt !== undefined) {
+        await this.destinationChecks.reset(shortCode)
       }
 
       return this.toSummary(record)
@@ -208,6 +234,19 @@ export class UrlsService {
     if (reason !== null) {
       throw new DestinationRejectedException(reason)
     }
+  }
+
+  /**
+   * Looks a destination up in Safe Browsing: rejects a flagged one, and returns when it was checked,
+   * or `null` when the lookup was skipped or failed and the next redirect should check it.
+   */
+  private async checkDestination(url: string): Promise<Date | null> {
+    const verdict = await this.safeBrowsing.lookup(url)
+    if (verdict.status === 'unsafe') {
+      this.logger.warn(`Destination rejected by Safe Browsing (${verdict.threatTypes.join(', ')})`)
+      throw new DestinationRejectedException('UNSAFE_DESTINATION')
+    }
+    return verdict.status === 'safe' ? new Date() : null
   }
 
   private toSummary(row: UrlSummaryRow): UrlSummary {

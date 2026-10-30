@@ -63,6 +63,7 @@ const envSchema = z
       .default('302')
       .transform((value) => (value === '301' ? 301 : 302)),
     URL_CREATE_DAILY_LIMIT: z.coerce.number().int().min(0).default(10),
+    SAFE_BROWSING_API_KEY: optionalString,
 
     APP_URL: z.url({ protocol: /^https?$/ }).transform((value) => value.replace(/\/+$/, '')),
     SUPPORT_EMAIL: z.email(),

@@ -32,6 +32,8 @@ const sharedEnv = {
   SMTP_HOST: 'localhost',
   SMTP_PORT: '1025',
   SMTP_FROM_EMAIL: 'noreply@example.com',
+  // Overrides a key in .env, so tests never reach Google; a test file turns it on with its own key.
+  SAFE_BROWSING_API_KEY: '',
 }
 
 const resolve = {

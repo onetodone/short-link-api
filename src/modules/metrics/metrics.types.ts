@@ -7,6 +7,9 @@ export type CounterName =
   | 'http_redirects_disabled_total'
   | 'clicks_flushed_total'
   | 'clicks_flush_errors_total'
+  | 'safe_browsing_lookups_total'
+  | 'safe_browsing_lookup_errors_total'
+  | 'safe_browsing_flagged_total'
 
 export interface CounterMeta {
   name: CounterName

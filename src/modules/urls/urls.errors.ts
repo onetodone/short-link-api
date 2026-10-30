@@ -2,17 +2,21 @@ import { HttpException, HttpStatus } from '@nestjs/common'
 
 import type { DestinationRejectionReason } from '@/modules/urls/destination-rules'
 
-const DESTINATION_MESSAGES: Record<DestinationRejectionReason, string> = {
+/** A destination rule, or `UNSAFE_DESTINATION` when Google Safe Browsing flags the URL. */
+export type DestinationRejectedReason = DestinationRejectionReason | 'UNSAFE_DESTINATION'
+
+const DESTINATION_MESSAGES: Record<DestinationRejectedReason, string> = {
   CREDENTIALS_IN_URL: 'Destination URL must not contain a username or password',
   IP_ADDRESS: 'Destination URL must use a domain name, not an IP address',
   LOCAL_HOST: 'Destination URL must point to a public domain',
   OWN_DOMAIN: 'Destination URL must not be another short link',
   URL_SHORTENER: 'Destination URL must not point to a URL shortener or redirector',
+  UNSAFE_DESTINATION: 'Destination URL is flagged as unsafe by Google Safe Browsing',
 }
 
-/** `422` with `code: DESTINATION_REJECTED` and the rule that rejected the URL in `reason`. */
+/** `422` with `code: DESTINATION_REJECTED` and why the URL was rejected in `reason`. */
 export class DestinationRejectedException extends HttpException {
-  constructor(reason: DestinationRejectionReason) {
+  constructor(reason: DestinationRejectedReason) {
     super(
       {
         statusCode: HttpStatus.UNPROCESSABLE_ENTITY,
