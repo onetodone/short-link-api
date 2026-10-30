@@ -229,6 +229,8 @@ describe('GET /api/v1/urls/:shortCode', () => {
       originalUrl: 'https://example.com/',
       note: 'docs',
       clicks: 0,
+      disabled: false,
+      disabledReason: null,
       createdAt: expect.any(String),
       updatedAt: expect.any(String),
     })

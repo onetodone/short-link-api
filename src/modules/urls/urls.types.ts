@@ -1,3 +1,5 @@
+import type { UrlDisabledReason } from '@prisma-client'
+
 export interface CreatedUrl {
   shortCode: string
   shortUrl: string
@@ -13,6 +15,8 @@ export interface UrlSummary {
   originalUrl: string
   note: string | null
   clicks: number
+  disabled: boolean
+  disabledReason: UrlDisabledReason | null
   createdAt: Date
   updatedAt: Date
 }

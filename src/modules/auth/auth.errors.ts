@@ -60,3 +60,19 @@ export class InvalidPasswordException extends HttpException {
     )
   }
 }
+
+/** `403` with `code: ACCOUNT_SUSPENDED`: the operator suspended the account; `supportEmail` is the way back. */
+export class AccountSuspendedException extends HttpException {
+  constructor(supportEmail: string) {
+    super(
+      {
+        statusCode: HttpStatus.FORBIDDEN,
+        message: `This account is suspended. Contact ${supportEmail} for details`,
+        error: 'Forbidden',
+        code: 'ACCOUNT_SUSPENDED',
+        supportEmail,
+      },
+      HttpStatus.FORBIDDEN,
+    )
+  }
+}

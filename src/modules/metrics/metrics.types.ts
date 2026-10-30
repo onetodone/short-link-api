@@ -4,6 +4,7 @@ export type CounterName =
   | 'urls_created_total'
   | 'http_redirects_total'
   | 'http_redirects_bot_total'
+  | 'http_redirects_disabled_total'
   | 'clicks_flushed_total'
   | 'clicks_flush_errors_total'
 

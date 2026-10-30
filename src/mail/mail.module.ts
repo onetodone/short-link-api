@@ -6,6 +6,7 @@ import { MailerModule } from '@onetodone/mailer/nestjs'
 import { MAIL_TRANSPORT } from '@/mail/mail.constants'
 import { MailTransportModule } from '@/mail/mail-transport.module'
 import { MailService } from '@/mail/mail.service'
+import { MAIL_TEMPLATES } from '@/mail/templates'
 
 const PRODUCT_NAME = 'Short Link'
 
@@ -23,6 +24,7 @@ const PRODUCT_NAME = 'Short Link'
 
         return {
           transport,
+          templates: MAIL_TEMPLATES,
           from: fromName ? { name: fromName, address: fromEmail } : fromEmail,
           branding: {
             companyName: PRODUCT_NAME,

@@ -6,7 +6,7 @@ import { MetricsService } from '@/modules/metrics/metrics.service'
 import type { ClicksService } from '@/modules/urls/clicks.service'
 import { isHumanClick } from '@/modules/urls/human-click.util'
 import { RedirectController } from '@/modules/urls/redirect.controller'
-import type { UrlsService } from '@/modules/urls/urls.service'
+import { LINK_DISABLED, type UrlsService } from '@/modules/urls/urls.service'
 
 const CHROME =
   'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0 Safari/537.36'
@@ -48,10 +48,10 @@ describe('isHumanClick', () => {
 })
 
 describe('RedirectController', () => {
-  function controller(redirectStatus: number) {
-    const urls = { resolve: vi.fn().mockResolvedValue('https://example.com/target') }
+  function controller(redirectStatus: number, resolved = 'https://example.com/target') {
+    const urls = { resolve: vi.fn().mockResolvedValue(resolved) }
     const clicks = { increment: vi.fn() }
-    const config = { get: () => redirectStatus }
+    const config = { get: () => redirectStatus, getOrThrow: () => 'https://app.test' }
     const instance = new RedirectController(
       urls as unknown as UrlsService,
       clicks as unknown as ClicksService,
@@ -62,7 +62,7 @@ describe('RedirectController', () => {
     const request = { method: 'GET', headers: { 'user-agent': CHROME } }
     const redirect = () =>
       instance.redirect('abc1234', request as unknown as FastifyRequest, reply as unknown as FastifyReply)
-    return { redirect, reply, clicks }
+    return { instance, redirect, reply, clicks }
   }
 
   it('sends a 302 that browsers must not reuse', async () => {
@@ -76,5 +76,16 @@ describe('RedirectController', () => {
     await expect(redirect()).resolves.toEqual({ url: 'https://example.com/target', statusCode: 301 })
     expect(reply.header).not.toHaveBeenCalled()
     expect(clicks.increment).toHaveBeenCalledWith('abc1234')
+  })
+
+  it('sends a disabled link to the front page that explains it, whatever the redirect status', async () => {
+    const { redirect, reply, clicks } = controller(301, LINK_DISABLED)
+    await expect(redirect()).resolves.toEqual({ url: 'https://app.test/link-disabled', statusCode: 302 })
+    expect(reply.header).toHaveBeenCalledWith('Cache-Control', 'private, max-age=0')
+    expect(clicks.increment).not.toHaveBeenCalled()
+  })
+
+  it('sends the site root to the front', () => {
+    expect(controller(301).instance.home()).toEqual({ url: 'https://app.test', statusCode: 302 })
   })
 })

@@ -9,6 +9,7 @@ export const appConfig = registerAs('app', () => ({
   port: env.PORT,
   apiPrefix: env.API_PREFIX,
   corsOrigin: env.CORS_ORIGIN,
+  appUrl: env.APP_URL,
   cookieSecret: env.COOKIE_SECRET,
   throttleTtl: env.THROTTLE_TTL,
   throttleLimit: env.THROTTLE_LIMIT,

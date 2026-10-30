@@ -1,3 +1,5 @@
+import { execFileSync } from 'node:child_process'
+
 /**
  * End-to-end smoke test for CI (and a handy local pre-push check).
  *
@@ -6,11 +8,14 @@
  * guarded create endpoint, email verification, a refused destination, the redirect (cache miss then
  * hit), a bot that is redirected but not counted as a click, an unknown-code 404, the Prometheus
  * /metrics counters, the refresh-session lifecycle (rotate, a racing tab converges, logout
- * revokes), a password reset, and account management (change the password, change the email,
- * delete the account, after which its link no longer resolves). Exits non-zero on the first failed check.
+ * revokes), a password reset, the moderation commands (a disabled link lands on the front's notice
+ * page, a suspended account can't sign in), and account management (change the password, change the
+ * email, delete the account, after which its link no longer resolves). Exits non-zero on the first
+ * failed check.
  *
  * The app must send its email to a Mailpit instance whose HTTP API is at MAILPIT_URL; the
- * verification, reset and email-change links are read from there.
+ * verification, reset and email-change links are read from there. The moderation commands run from
+ * the build (`dist/`) with the same environment, so they reach the app's database and Redis.
  *
  *   node dist/src/main &
  *   BASE_URL=http://localhost:3000 MAILPIT_URL=http://localhost:8025 pnpm smoke
@@ -23,6 +28,7 @@ const REDIRECT_STATUS = Number(process.env.REDIRECT_STATUS ?? 302)
 const CLICKS_TIMEOUT_MS = Math.max(15_000, 3 * Number(process.env.CLICKS_FLUSH_INTERVAL_MS ?? 5000))
 const MAILPIT_URL = (process.env.MAILPIT_URL ?? 'http://localhost:8025').replace(/\/+$/, '')
 const MAIL_TIMEOUT_MS = 15_000
+const MODERATION_CLI = 'dist/src/cli/moderation.js'
 
 const BROWSER_UA =
   'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0 Safari/537.36'
@@ -88,6 +94,17 @@ async function emailedToken(to: string, path: string): Promise<string> {
   }
   assert(false, `an email to ${to} with a ${path} link reached Mailpit at ${MAILPIT_URL}`, lastError)
   throw new Error('unreachable')
+}
+
+/** Runs an operator command of the built app against the same database and Redis as the app. */
+function moderate(...args: string[]): void {
+  try {
+    execFileSync(process.execPath, [MODERATION_CLI, ...args], { stdio: 'pipe' })
+    pass(`moderation ${args.join(' ')}`)
+  } catch (error: unknown) {
+    const { stderr } = error as { stderr?: Buffer }
+    assert(false, `moderation ${args.join(' ')} succeeded`, String(stderr ?? error))
+  }
 }
 
 async function waitForBoot(): Promise<void> {
@@ -380,12 +397,58 @@ async function main(): Promise<void> {
       headers: json,
       body: JSON.stringify({ email: credentials.email, password: resetPassword }),
     })
-    const loginBody = (await loginRes.json().catch(() => ({}))) as { accessToken?: unknown }
     assert(
       loginRes.status === 200,
       `POST /${API_PREFIX}/auth/login with the new password -> 200 (got ${loginRes.status})`,
     )
-    sessionToken = String(loginBody.accessToken)
+  }
+
+  // Moderation through the operator commands: a disabled link lands on the front's notice page, and
+  // a suspended account can't sign in until the suspension is lifted.
+  {
+    const homeRes = await fetch(`${BASE_URL}/`, { redirect: 'manual' })
+    const appUrl = homeRes.headers.get('location') ?? ''
+    assert(homeRes.status === 302 && appUrl !== '', `GET / -> 302 to the front (got ${homeRes.status} ${appUrl})`)
+
+    moderate('link:disable', shortCode)
+    const disabledRes = await fetch(`${BASE_URL}/${shortCode}`, {
+      redirect: 'manual',
+      headers: { 'user-agent': BROWSER_UA },
+    })
+    assert(
+      disabledRes.status === 302 && disabledRes.headers.get('location') === `${appUrl}/link-disabled`,
+      `GET /${shortCode} after link:disable -> 302 ${appUrl}/link-disabled (got ${disabledRes.status} ${disabledRes.headers.get('location')})`,
+    )
+
+    moderate('link:enable', shortCode)
+    const enabledRes = await fetch(`${BASE_URL}/${shortCode}`, {
+      redirect: 'manual',
+      headers: { 'user-agent': BOT_UA },
+    })
+    assert(
+      enabledRes.headers.get('location') === target,
+      `GET /${shortCode} after link:enable -> the destination (got ${enabledRes.headers.get('location')})`,
+    )
+
+    const json = { 'content-type': 'application/json' }
+    const credentialsBody = JSON.stringify({ email: credentials.email, password: resetPassword })
+    moderate('user:suspend', credentials.email)
+    const suspendedRes = await fetch(apiUrl('auth/login'), { method: 'POST', headers: json, body: credentialsBody })
+    const suspendedBody = (await suspendedRes.json().catch(() => ({}))) as { code?: unknown }
+    assert(
+      suspendedRes.status === 403 && suspendedBody.code === 'ACCOUNT_SUSPENDED',
+      `POST /${API_PREFIX}/auth/login while suspended -> 403 ACCOUNT_SUSPENDED (got ${suspendedRes.status})`,
+      suspendedBody,
+    )
+
+    moderate('user:unsuspend', credentials.email)
+    const restoredRes = await fetch(apiUrl('auth/login'), { method: 'POST', headers: json, body: credentialsBody })
+    const restoredBody = (await restoredRes.json().catch(() => ({}))) as { accessToken?: unknown }
+    assert(
+      restoredRes.status === 200,
+      `POST /${API_PREFIX}/auth/login after user:unsuspend -> 200 (got ${restoredRes.status})`,
+    )
+    sessionToken = String(restoredBody.accessToken)
   }
 
   // Account management: change the password, move to another address, then delete the account.

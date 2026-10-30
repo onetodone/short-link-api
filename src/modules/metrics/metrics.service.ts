@@ -11,6 +11,10 @@ const COUNTERS: readonly CounterMeta[] = [
     name: 'http_redirects_bot_total',
     help: 'Redirects not counted as clicks: bots, link-preview crawlers, prefetches and HEAD requests',
   },
+  {
+    name: 'http_redirects_disabled_total',
+    help: 'Requests for disabled links, sent to the link-disabled page and not counted as clicks',
+  },
   { name: 'clicks_flushed_total', help: 'Buffered clicks reconciled into Postgres by the flush cycle' },
   { name: 'clicks_flush_errors_total', help: 'Click-buffer flush cycles that failed and were re-buffered' },
 ] as const

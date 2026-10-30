@@ -8,6 +8,7 @@ import { hashSessionSecret, verifySessionSecret } from '@/common/session-hash.ut
 import { encodeSessionToken, generateSessionSecret, parseSessionToken } from '@/common/session-token.util'
 import { PrismaService } from '@/database/prisma.service'
 import { BCRYPT_COST, toAuthUser, USER_SELECT } from '@/modules/auth/auth-user'
+import { AccountSuspendedException } from '@/modules/auth/auth.errors'
 import type { AuthProfile, AuthResult, AuthUser, RequestContext } from '@/modules/auth/auth.types'
 import { VerificationService } from '@/modules/auth/verification.service'
 import { Prisma } from '@prisma-client'
@@ -21,7 +22,7 @@ const ROTATION_GRACE_MS = 30_000
 const REFRESH_REJECTED = 'Invalid or expired refresh token'
 
 const SESSION_INCLUDE = {
-  user: { select: USER_SELECT },
+  user: { select: { ...USER_SELECT, suspendedAt: true } },
 } satisfies Prisma.SessionInclude
 
 type SessionWithUser = Prisma.SessionGetPayload<{ include: typeof SESSION_INCLUDE }>
@@ -32,6 +33,7 @@ export class AuthService {
 
   private readonly accessTtl: JwtSignOptions['expiresIn']
   private readonly refreshTtlSeconds: number
+  private readonly supportEmail: string
 
   private readonly recentRotations = new Map<string, { secret: string; until: number }>()
 
@@ -46,6 +48,7 @@ export class AuthService {
       config.get<string>('jwt.refreshExpiresIn', '7d'),
       DEFAULT_REFRESH_TTL_SECONDS,
     )
+    this.supportEmail = config.getOrThrow<string>('mail.supportEmail')
   }
 
   async register(email: string, password: string, ctx: RequestContext): Promise<AuthResult> {
@@ -74,13 +77,16 @@ export class AuthService {
   async login(email: string, password: string, ctx: RequestContext): Promise<AuthResult> {
     const user = await this.prisma.user.findUnique({
       where: { email },
-      select: { ...USER_SELECT, passwordHash: true },
+      select: { ...USER_SELECT, passwordHash: true, suspendedAt: true },
     })
 
     const matches = await bcrypt.compare(password, user?.passwordHash ?? TIMING_GUARD_HASH)
 
     if (!user || !matches) {
       throw new UnauthorizedException('Invalid email or password')
+    }
+    if (user.suspendedAt) {
+      throw new AccountSuspendedException(this.supportEmail)
     }
 
     return this.issueTokens(toAuthUser(user), ctx)
@@ -106,6 +112,12 @@ export class AuthService {
     if (session.expiresAt.getTime() <= now) {
       await this.discard(session.id)
       throw new UnauthorizedException(REFRESH_REJECTED)
+    }
+
+    // Suspension revokes every session; this catches one created while the suspension was committing.
+    if (session.user.suspendedAt) {
+      await this.discard(session.id)
+      throw new AccountSuspendedException(this.supportEmail)
     }
 
     const withinGrace = session.rotatedAt !== null && now - session.rotatedAt.getTime() < ROTATION_GRACE_MS

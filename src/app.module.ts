@@ -23,6 +23,7 @@ import { AccountModule } from '@/modules/account/account.module'
 import { AuthModule } from '@/modules/auth/auth.module'
 import { HealthModule } from '@/modules/health/health.module'
 import { MetricsModule } from '@/modules/metrics/metrics.module'
+import { ModerationModule } from '@/modules/moderation/moderation.module'
 import { UrlsModule } from '@/modules/urls/urls.module'
 import { AppController } from '@/app.controller'
 
@@ -56,6 +57,7 @@ import { AppController } from '@/app.controller'
     HealthModule,
     UrlsModule,
     AccountModule,
+    ModerationModule,
   ],
   controllers: [AppController],
   providers: [{ provide: APP_GUARD, useClass: ThrottlerGuard }],
