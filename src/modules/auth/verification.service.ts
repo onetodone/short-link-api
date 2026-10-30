@@ -13,6 +13,7 @@ import {
 import { BCRYPT_COST, toAuthUser, USER_SELECT } from '@/modules/auth/auth-user'
 import { EmailCooldownException, InvalidTokenException } from '@/modules/auth/auth.errors'
 import type { AuthUser, RequestContext } from '@/modules/auth/auth.types'
+import { CaptchaService } from '@/modules/auth/captcha.service'
 import { EmailCooldownService } from '@/modules/auth/email-cooldown.service'
 import { Prisma, VerificationTokenType } from '@prisma-client'
 
@@ -26,6 +27,7 @@ export class VerificationService {
     private readonly prisma: PrismaService,
     private readonly mail: MailService,
     private readonly cooldown: EmailCooldownService,
+    private readonly captcha: CaptchaService,
   ) {}
 
   /** Emails a fresh confirmation link; earlier links stop working. */
@@ -88,7 +90,7 @@ export class VerificationService {
     })
   }
 
-  /** Sets the password, confirms the email address and revokes every session of the account. */
+  /** Sets the password, confirms the email address, revokes every session and lifts the failed sign-in count. */
   async resetPassword(token: string, password: string, ctx: RequestContext): Promise<void> {
     const known = await this.prisma.verificationToken.findUnique({
       where: { tokenHash: hashSessionSecret(token) },
@@ -125,6 +127,7 @@ export class VerificationService {
     }
 
     this.logger.log(`Password reset for user ${user.id}; all sessions revoked`)
+    await this.captcha.clearLoginFailures(user.email)
     this.mail.sendPasswordChanged(user.email, { changedAt, ip: ctx.ip })
   }
 

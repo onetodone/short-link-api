@@ -4,6 +4,7 @@ const MIN_PASSWORD_LENGTH = 8
 const MAX_PASSWORD_LENGTH = 128
 const MAX_EMAIL_LENGTH = 254
 const MAX_TOKEN_LENGTH = 256
+const MAX_CAPTCHA_TOKEN_LENGTH = 2048
 
 export const emailField = z
   .string()
@@ -24,3 +25,9 @@ export const currentPasswordField = z
   .string()
   .min(1, 'Password is required')
   .max(MAX_PASSWORD_LENGTH, `Password must be at most ${MAX_PASSWORD_LENGTH} characters`)
+
+export const captchaTokenField = z
+  .string()
+  .max(MAX_CAPTCHA_TOKEN_LENGTH, 'Verification token is invalid')
+  .optional()
+  .transform((value) => value || undefined)

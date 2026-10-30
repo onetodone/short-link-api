@@ -8,8 +8,9 @@ import { hashSessionSecret, verifySessionSecret } from '@/common/session-hash.ut
 import { encodeSessionToken, generateSessionSecret, parseSessionToken } from '@/common/session-token.util'
 import { PrismaService } from '@/database/prisma.service'
 import { BCRYPT_COST, toAuthUser, USER_SELECT } from '@/modules/auth/auth-user'
-import { AccountSuspendedException } from '@/modules/auth/auth.errors'
+import { AccountSuspendedException, InvalidCredentialsException } from '@/modules/auth/auth.errors'
 import type { AuthProfile, AuthResult, AuthUser, RequestContext } from '@/modules/auth/auth.types'
+import { CaptchaService } from '@/modules/auth/captcha.service'
 import { VerificationService } from '@/modules/auth/verification.service'
 import { Prisma } from '@prisma-client'
 
@@ -41,6 +42,7 @@ export class AuthService {
     private readonly prisma: PrismaService,
     private readonly jwt: JwtService,
     private readonly verification: VerificationService,
+    private readonly captcha: CaptchaService,
     config: ConfigService,
   ) {
     this.accessTtl = config.get<string>('jwt.expiresIn', '15m') as JwtSignOptions['expiresIn']
@@ -74,7 +76,16 @@ export class AuthService {
     return result
   }
 
-  async login(email: string, password: string, ctx: RequestContext): Promise<AuthResult> {
+  async login(
+    email: string,
+    password: string,
+    captchaToken: string | undefined,
+    ctx: RequestContext,
+  ): Promise<AuthResult> {
+    if (await this.captcha.loginRequired(ctx.ip, email)) {
+      await this.captcha.verify(captchaToken, 'login', ctx.ip)
+    }
+
     const user = await this.prisma.user.findUnique({
       where: { email },
       select: { ...USER_SELECT, passwordHash: true, suspendedAt: true },
@@ -83,7 +94,7 @@ export class AuthService {
     const matches = await bcrypt.compare(password, user?.passwordHash ?? TIMING_GUARD_HASH)
 
     if (!user || !matches) {
-      throw new UnauthorizedException('Invalid email or password')
+      throw new InvalidCredentialsException(await this.captcha.recordLoginFailure(ctx.ip, email))
     }
     if (user.suspendedAt) {
       throw new AccountSuspendedException(this.supportEmail)

@@ -1,7 +1,7 @@
 # Short Link API
 
 [![CI Status](https://github.com/onetodone/short-link-api/actions/workflows/ci.yml/badge.svg)](https://github.com/onetodone/short-link-api/actions/workflows/ci.yml)
-[![Version](https://img.shields.io/badge/version-1.8.0-blue.svg)](./package.json)
+[![Version](https://img.shields.io/badge/version-1.9.0-blue.svg)](./package.json)
 [![pnpm](https://img.shields.io/badge/pnpm-v12-F69220?logo=pnpm&logoColor=white)](https://pnpm.io/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](./LICENSE)
 
@@ -25,6 +25,7 @@ a database write.
 - **Observability:** `nestjs-pino` structured logs, Prometheus `/metrics`, `/health` + `/health/ready`
 - **Rate limiting:** `@nestjs/throttler` (in-memory, per-IP)
 - **Link safety:** destination rules, Google Safe Browsing checks on save and after redirects, operator moderation commands
+- **Bot protection:** Cloudflare Turnstile on registration, password reset requests and repeated failed sign-ins
 
 ---
 
@@ -67,6 +68,8 @@ DestinationChecksService: SET NX shortlink:sb:{code} -> due? -> Safe Browsing lo
   [Mailpit](https://mailpit.axllent.org) on port `1025` keeps the emails local.
 - Optional: a **Google Safe Browsing API key** (`SAFE_BROWSING_API_KEY`) to check destinations
   (see [Unsafe destinations](#unsafe-destinations)).
+- Optional: a **Cloudflare Turnstile widget** (`TURNSTILE_SITE_KEY` / `TURNSTILE_SECRET_KEY`) to keep
+  scripts off the public auth forms (see [Bot protection](#bot-protection)).
 
 ---
 
@@ -98,15 +101,15 @@ endpoints (`/health`, `/health/ready`, `/metrics`).
 
 | Method & path                    | Auth                                 | Body                                                        | Result                                                                                                          |
 | -------------------------------- | ------------------------------------ | ----------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------- |
-| `POST /api/v1/auth/register`     | –                                    | `{ email, password }` (password 8–128)                      | `201 { user, accessToken }` + `refresh_token` cookie · emails a confirmation link                               |
-| `POST /api/v1/auth/login`        | –                                    | `{ email, password }`                                       | `200 { user, accessToken }` + `refresh_token` cookie · `403 ACCOUNT_SUSPENDED`                                  |
+| `POST /api/v1/auth/register`     | –                                    | `{ email, password, captchaToken? }` (password 8–128)       | `201 { user, accessToken }` + `refresh_token` cookie · emails a confirmation link · `400 CAPTCHA_REQUIRED` / `CAPTCHA_FAILED` · `503 CAPTCHA_UNAVAILABLE` |
+| `POST /api/v1/auth/login`        | –                                    | `{ email, password, captchaToken? }`                        | `200 { user, accessToken }` + `refresh_token` cookie · `401 { captchaRequired }` · `403 ACCOUNT_SUSPENDED` · `400 CAPTCHA_REQUIRED` / `CAPTCHA_FAILED` · `503 CAPTCHA_UNAVAILABLE` |
 | `POST /api/v1/auth/refresh`      | `refresh_token` cookie               | –                                                           | `200 { user, accessToken }` + rotated `refresh_token` cookie · `403 ACCOUNT_SUSPENDED`                          |
 | `POST /api/v1/auth/logout`       | Bearer access token                  | –                                                           | `204` — revokes this session · clears the cookie                                                                |
 | `POST /api/v1/auth/logout-all`   | Bearer access token                  | –                                                           | `204` — revokes every session the caller owns                                                                   |
 | `GET /api/v1/auth/me`            | Bearer access token                  | –                                                           | `200 { id, email, emailVerified, createdAt }`                                                                   |
 | `POST /api/v1/auth/verify-email` | –                                    | `{ token }`                                                 | `200 { user }` · `400 INVALID_TOKEN`                                                                            |
 | `POST /api/v1/auth/verify-email/resend` | Bearer access token           | –                                                           | `204` (also when already confirmed) · `429 EMAIL_COOLDOWN`                                                      |
-| `POST /api/v1/auth/password/forgot` | –                                 | `{ email }`                                                 | `204` always — emails a reset link only if the account exists                                                   |
+| `POST /api/v1/auth/password/forgot` | –                                 | `{ email, captchaToken? }`                                  | `204` — emails a reset link only if the account exists · `400 CAPTCHA_REQUIRED` / `CAPTCHA_FAILED` · `503 CAPTCHA_UNAVAILABLE` |
 | `POST /api/v1/auth/password/reset` | –                                  | `{ token, password }` (password 8–128)                      | `204` — revokes every session · clears the cookie · `400 INVALID_TOKEN`                                         |
 | `PATCH /api/v1/auth/me/password` | Bearer access token               | `{ currentPassword, newPassword }` (new 8–128)              | `204` — revokes every other session · emails a notice · `403 INVALID_PASSWORD`                                  |
 | `POST /api/v1/auth/me/email`     | Bearer access token                  | `{ newEmail, password }`                                    | `204` — emails a confirmation link to the new address and a notice to the current one · `400` same address · `403 INVALID_PASSWORD` · `429 EMAIL_COOLDOWN` |
@@ -123,6 +126,7 @@ endpoints (`/health`, `/health/ready`, `/metrics`).
 | `GET /health/ready`              | –                                    | –                                                           | `200 { status, database, redis }` · `503` if a dependency is down                                               |
 | `GET /metrics`                   | –                                    | –                                                           | `200` Prometheus text exposition                                                                                |
 | `GET /api/v1`                    | –                                    | –                                                           | `200 { name, version }`                                                                                         |
+| `GET /api/v1/config`             | –                                    | –                                                           | `200 { turnstileSiteKey, oauthProviders }` — settings for the frontend · `Cache-Control: public, max-age=300`   |
 
 ### Sessions & token rotation
 
@@ -170,7 +174,7 @@ confirmed. The check reads the account, not a token claim, so a confirmation app
 already open. `POST /auth/verify-email/resend` sends a fresh link and retires the previous one; it is
 limited to one email per account per 60 s (`429 EMAIL_COOLDOWN` with `retryAfter`).
 
-`POST /auth/password/forgot` always answers `204` at once: looking up the account and sending
+`POST /auth/password/forgot` answers `204` at once (after the [Turnstile check](#bot-protection), when it is on): looking up the account and sending
 happen in the background, so neither the answer nor its timing reveals whether an address is
 registered. An existing account gets a link to `${APP_URL}/reset-password?token=…`, at most one per
 60 s. `POST /auth/password/reset` sets the new password, revokes every session of the account
@@ -296,6 +300,36 @@ To get a key, create a Google Cloud project, enable the **Safe Browsing API**, a
 restricted to that API. The Safe Browsing API is free for **non-commercial use only**; a commercial
 service needs [Web Risk](https://cloud.google.com/web-risk) instead.
 
+### Bot protection
+
+With `TURNSTILE_SITE_KEY` and `TURNSTILE_SECRET_KEY` set, the public auth forms ask for a
+[Cloudflare Turnstile](https://developers.cloudflare.com/turnstile/) token in the `captchaToken` body
+field, checked with Cloudflare's `siteverify` (5 s timeout) together with the client IP:
+
+- **`register`** and **`password/forgot`** — always.
+- **`login`** — once the client IP or the account has 3 failed sign-ins within 15 minutes (Redis
+  counters `login-failures:ip:<ip>` and `login-failures:email:<email>`). Every `401` carries
+  `captchaRequired`, telling the frontend whether to show the widget for the next attempt; the
+  check runs before the password is compared. A password reset lifts the account's count.
+
+Each form checks the token's action (`register`, `login`, `forgot-password`), so a token solved on
+one form is refused by another. A missing token returns `400 CAPTCHA_REQUIRED`, a rejected one
+`400 CAPTCHA_FAILED`. The check fails closed: when Cloudflare can't be reached the form returns
+`503 CAPTCHA_UNAVAILABLE`. If Redis is down the login counters are skipped and sign-in works without
+the check; the credential rate limits still apply.
+
+The frontend reads the site key from `GET /api/v1/config` (`turnstileSiteKey`, `null` when the
+check is off), so it doesn't need the key in its own environment. Behind the frontend's server-side
+proxy, set `FRONT_PROXY_SECRET` (see [Client IP](#client-ip)): otherwise every user shares the
+frontend's IP, and 3 failed sign-ins by anyone make every sign-in ask for the check.
+
+To get the keys, add a widget in the Cloudflare dashboard (Turnstile → Add widget, mode "Managed")
+for the frontend's domain. Both keys or neither must be set; without them no form asks for a token
+and `captchaToken` is ignored. Cloudflare's
+[testing keys](https://developers.cloudflare.com/turnstile/troubleshooting/testing/) work too: the
+secret `1x0000000000000000000000000000000AA` accepts any token and
+`2x0000000000000000000000000000000AA` rejects every token.
+
 ### Click counting
 
 `clicks` counts people. `GET /:shortCode` redirects every caller, but a hit is counted only when it
@@ -372,6 +406,7 @@ the `env` object it exports. An invalid `.env` fails fast at startup.
 | `REDIRECT_STATUS`                              | `302`                     | `GET /:shortCode` status: `301` \| `302`         |
 | `URL_CREATE_DAILY_LIMIT`                       | `10`                      | Links per account per 24 h (`0` = no quota)      |
 | `SAFE_BROWSING_API_KEY`                        | –                         | Google Safe Browsing key; empty turns the checks off (see [Unsafe destinations](#unsafe-destinations)) |
+| `TURNSTILE_SITE_KEY` / `TURNSTILE_SECRET_KEY`  | – / –                     | Cloudflare Turnstile widget keys, both or neither; empty turns the check off (see [Bot protection](#bot-protection)) |
 | `CACHE_TTL_SECONDS`                            | `3600`                    | Positive cache TTL                               |
 | `CACHE_NEGATIVE_TTL_SECONDS`                   | `60`                      | Negative (unknown-code) cache TTL                |
 | `CACHE_LOCK_TTL_MS`                            | `3000`                    | `SET NX` stampede-lock TTL                       |
@@ -409,6 +444,9 @@ the `env` object it exports. An invalid `.env` fails fast at startup.
   | `safe_browsing_lookups_total` | destinations looked up in Safe Browsing                    |
   | `safe_browsing_lookup_errors_total` | lookups that failed or timed out (destination let through) |
   | `safe_browsing_flagged_total` | destinations flagged, rejected on save or disabled         |
+  | `captcha_checks_total`      | Turnstile tokens sent to Cloudflare                          |
+  | `captcha_rejected_total`    | tokens rejected or issued for another form                   |
+  | `captcha_errors_total`      | checks that failed or timed out (request refused)            |
   | `process_uptime_seconds`    | gauge, seconds since the registry was created                |
 
 - **Logs** — every request logs `method`, `url`, `remoteAddress`, `responseTime`, and `userId`
@@ -551,7 +589,8 @@ emits the decorator metadata Nest's dependency injection needs.
 - **Unit** (`test/unit/`) — pure logic: short-code generation, session token and hash helpers,
   duration parsing, env validation, the trusted-proxy rules, the request schemas, and the click filter
   and redirect status, the account-email and account-management request schemas, and the moderation
-  command and target parsing, and the Safe Browsing response decoding and re-check schedule.
+  command and target parsing, the Safe Browsing response decoding and re-check schedule, and the
+  Turnstile `siteverify` client.
 - **Integration** (`test/integration/`) — the whole application, built by the same `createApp()` as
   `main.ts` and driven through Fastify's `inject()`, against real Postgres and Redis: registration,
   login, throttling, refresh rotation with the grace window and reuse revocation, logout, URL CRUD
@@ -560,10 +599,13 @@ emits the decorator metadata Nest's dependency injection needs.
   email verification and its gate on link creation, password reset with session revocation, resend
   and reset cooldowns, token expiry and sweeping, password and email changes, account deletion with
   its links and their cache keys, link moderation and account suspension through the operator commands,
-  Safe Browsing checks on save and after redirects, and the ops endpoints. The tests replace the SMTP
+  Safe Browsing checks on save and after redirects, the Turnstile checks on registration, reset
+  requests and failed sign-ins, and the ops endpoints. The tests replace the SMTP
   transport with one that records each email, and read the links from it. Safe Browsing is off in the
   tests; `test/integration/safe-browsing.test.ts` turns it on with a stand-in for the Google API
-  (`test/safe-browsing-double.ts`), so no test reaches Google.
+  (`test/safe-browsing-double.ts`), so no test reaches Google. Turnstile is off too;
+  `test/integration/captcha.test.ts` turns it on with a stand-in for `siteverify`
+  (`test/turnstile-double.ts`).
 
 Integration tests empty every table and every Redis key under their prefix, so they use a database
 whose name ends in `_test` — `TEST_DATABASE_URL`, or by default the database of `DATABASE_URL` with
@@ -588,7 +630,7 @@ request, and on demand (`workflow_dispatch`):
   applies migrations, fails on any schema drift (`prisma migrate diff … --exit-code`), builds, boots
   the app, and runs `pnpm smoke` (`scripts/smoke.ts`) against it — liveness, readiness, auth, email
   verification, password reset and account management (links read from Mailpit's API at
-  `MAILPIT_URL`), create, redirect, `/metrics`, and the moderation commands run from the build.
+  `MAILPIT_URL`), the public config, create, redirect, `/metrics`, and the moderation commands run from the build.
 
 ---
 
@@ -600,6 +642,7 @@ src/
   cli/moderation.ts          operator commands (link:disable, link:enable, user:suspend, user:unsuspend) over a slim app context
   app.factory.ts             createApp(): Fastify adapter (trusted proxy), logger, Zod pipe, cookie, CORS — shared with the tests
   app.module.ts              config + logger + throttler + feature modules
+  app.controller.ts          API info + public config for the frontend
   config/                    env.ts (single zod-validated env helper) + registerAs factories over it
   common/load-env.ts         side-effect `.env` load, imported first by main.ts and by config/env.ts
   common/api-prefix.ts       API_PREFIX constant shared by the JSON API controllers
@@ -613,7 +656,7 @@ src/
     urls/                    create + list + get + update + delete + resolve, short-code CSPRNG, destination rules + shortener list, Safe Browsing client + re-check queue, creation quota, click buffer, redirect controller + bot/prefetch click filter
     moderation/              disable / enable links, suspend / restore accounts, with cache eviction and owner emails
     account/                 password change, email change + confirmation, account deletion with its links and cache keys
-    auth/                    bcrypt, access-JWT issue/verify, rotating refresh sessions + reuse detection, logout, email verification + gate, password reset, email cooldowns, hourly sweep
+    auth/                    bcrypt, access-JWT issue/verify, rotating refresh sessions + reuse detection, logout, email verification + gate, password reset, email cooldowns, Turnstile checks + failed sign-in counters, hourly sweep
     health/                  liveness + readiness
     metrics/                 in-memory counters + Prometheus endpoint
 prisma/
@@ -629,6 +672,7 @@ test/
   unit/                      pure-logic tests
   integration/               whole-app tests against Postgres + Redis (helpers/ boots the app, resets state)
   safe-browsing-double.ts    stand-in for the Safe Browsing API, shared by both projects
+  turnstile-double.ts        stand-in for Turnstile siteverify
 ```
 
 ---

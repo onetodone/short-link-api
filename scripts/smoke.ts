@@ -4,7 +4,7 @@ import { execFileSync } from 'node:child_process'
  * End-to-end smoke test for CI (and a handy local pre-push check).
  *
  * Assumes the app is already listening on BASE_URL. Walks the critical path:
- * liveness, readiness (Postgres + Redis), the reported version, register, the
+ * liveness, readiness (Postgres + Redis), the reported version, the public config, register, the
  * guarded create endpoint, email verification, a refused destination, the redirect (cache miss then
  * hit), a bot that is redirected but not counted as a click, an unknown-code 404, the Prometheus
  * /metrics counters, the refresh-session lifecycle (rotate, a racing tab converges, logout
@@ -16,6 +16,9 @@ import { execFileSync } from 'node:child_process'
  * The app must send its email to a Mailpit instance whose HTTP API is at MAILPIT_URL; the
  * verification, reset and email-change links are read from there. The moderation commands run from
  * the build (`dist/`) with the same environment, so they reach the app's database and Redis.
+ *
+ * With Turnstile on, registration and the reset request send Cloudflare's dummy token, which only
+ * the always-pass testing secret key accepts; run the smoke with Turnstile off or with that key.
  *
  *   node dist/src/main &
  *   BASE_URL=http://localhost:3000 MAILPIT_URL=http://localhost:8025 pnpm smoke
@@ -32,6 +35,7 @@ const MODERATION_CLI = 'dist/src/cli/moderation.js'
 
 const BROWSER_UA =
   'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0 Safari/537.36'
+const TURNSTILE_DUMMY_TOKEN = 'XXXX.DUMMY.TOKEN.XXXX'
 const BOT_UA = 'Slackbot-LinkExpanding 1.0 (+https://api.slack.com/robots)'
 
 const apiUrl = (path: string): string => `${BASE_URL}/${API_PREFIX}/${path.replace(/^\/+/, '')}`
@@ -151,6 +155,21 @@ async function main(): Promise<void> {
     )
   }
 
+  // Public config — the frontend reads the Turnstile site key from here.
+  let captchaToken: string | undefined
+  {
+    const res = await fetch(apiUrl('config'))
+    const body = (await res.json().catch(() => ({}))) as { turnstileSiteKey?: unknown; oauthProviders?: unknown }
+    assert(res.status === 200, `GET /${API_PREFIX}/config -> 200 (got ${res.status})`, body)
+    assert(
+      (body.turnstileSiteKey === null || typeof body.turnstileSiteKey === 'string') &&
+        Array.isArray(body.oauthProviders),
+      'config reports turnstileSiteKey and oauthProviders',
+      body,
+    )
+    if (typeof body.turnstileSiteKey === 'string') captchaToken = TURNSTILE_DUMMY_TOKEN
+  }
+
   // Register a throwaway account and capture an access token.
   const credentials = {
     email: `smoke+${Date.now()}@short-link.test`,
@@ -159,7 +178,7 @@ async function main(): Promise<void> {
   const registerRes = await fetch(apiUrl('auth/register'), {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
-    body: JSON.stringify(credentials),
+    body: JSON.stringify({ ...credentials, captchaToken }),
   })
   const registerBody = (await registerRes.json().catch(() => ({}))) as {
     accessToken?: unknown
@@ -379,7 +398,7 @@ async function main(): Promise<void> {
     const forgotRes = await fetch(apiUrl('auth/password/forgot'), {
       method: 'POST',
       headers: json,
-      body: JSON.stringify({ email: credentials.email }),
+      body: JSON.stringify({ email: credentials.email, captchaToken }),
     })
     assert(forgotRes.status === 204, `POST /${API_PREFIX}/auth/password/forgot -> 204 (got ${forgotRes.status})`)
 

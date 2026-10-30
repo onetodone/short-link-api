@@ -34,6 +34,9 @@ const sharedEnv = {
   SMTP_FROM_EMAIL: 'noreply@example.com',
   // Overrides a key in .env, so tests never reach Google; a test file turns it on with its own key.
   SAFE_BROWSING_API_KEY: '',
+  // Same for Turnstile: a test file turns it on with Cloudflare's testing keys and a stand-in for siteverify.
+  TURNSTILE_SITE_KEY: '',
+  TURNSTILE_SECRET_KEY: '',
 }
 
 const resolve = {

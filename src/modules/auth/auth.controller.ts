@@ -23,6 +23,7 @@ import {
   REFRESH_THROTTLE,
 } from '@/modules/auth/auth.constants'
 import { AuthService } from '@/modules/auth/auth.service'
+import { CaptchaService } from '@/modules/auth/captcha.service'
 import type { AuthProfile, AuthResponse, AuthResult, AuthUser, RequestContext } from '@/modules/auth/auth.types'
 import { CurrentUser } from '@/modules/auth/current-user.decorator'
 import { ForgotPasswordDto } from '@/modules/auth/dto/forgot-password.dto'
@@ -45,6 +46,7 @@ export class AuthController {
   constructor(
     private readonly auth: AuthService,
     private readonly verification: VerificationService,
+    private readonly captcha: CaptchaService,
     config: ConfigService,
   ) {
     this.cookieSecure = config.get<string>('app.nodeEnv', 'production') === 'production'
@@ -63,6 +65,7 @@ export class AuthController {
     @UserAgent() userAgent: string | undefined,
     @Res({ passthrough: true }) reply: FastifyReply,
   ): Promise<AuthResponse> {
+    await this.captcha.verify(dto.captchaToken, 'register', ip)
     const result = await this.auth.register(dto.email, dto.password, { ip, userAgent })
     return this.finish(reply, result)
   }
@@ -76,7 +79,7 @@ export class AuthController {
     @UserAgent() userAgent: string | undefined,
     @Res({ passthrough: true }) reply: FastifyReply,
   ): Promise<AuthResponse> {
-    const result = await this.auth.login(dto.email, dto.password, { ip, userAgent })
+    const result = await this.auth.login(dto.email, dto.password, dto.captchaToken, { ip, userAgent })
     return this.finish(reply, result)
   }
 
@@ -142,7 +145,8 @@ export class AuthController {
   @Post('password/forgot')
   @HttpCode(HttpStatus.NO_CONTENT)
   @Throttle(CREDENTIALS_THROTTLE)
-  forgotPassword(@Body() dto: ForgotPasswordDto): void {
+  async forgotPassword(@Body() dto: ForgotPasswordDto, @UserIp() ip: string | undefined): Promise<void> {
+    await this.captcha.verify(dto.captchaToken, 'forgot-password', ip)
     this.verification.requestPasswordReset(dto.email)
   }
 

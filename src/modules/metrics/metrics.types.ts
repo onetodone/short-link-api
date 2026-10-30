@@ -10,6 +10,9 @@ export type CounterName =
   | 'safe_browsing_lookups_total'
   | 'safe_browsing_lookup_errors_total'
   | 'safe_browsing_flagged_total'
+  | 'captcha_checks_total'
+  | 'captcha_rejected_total'
+  | 'captcha_errors_total'
 
 export interface CounterMeta {
   name: CounterName
