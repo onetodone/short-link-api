@@ -1,7 +1,7 @@
 # Short Link API
 
 [![CI Status](https://github.com/onetodone/short-link-api/actions/workflows/ci.yml/badge.svg)](https://github.com/onetodone/short-link-api/actions/workflows/ci.yml)
-[![Version](https://img.shields.io/badge/version-1.6.0-blue.svg)](./package.json)
+[![Version](https://img.shields.io/badge/version-1.7.0-blue.svg)](./package.json)
 [![pnpm](https://img.shields.io/badge/pnpm-v12-F69220?logo=pnpm&logoColor=white)](https://pnpm.io/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](./LICENSE)
 
@@ -21,7 +21,7 @@ a database write.
 - **Cache / buffer:** Redis via `ioredis`
 - **Validation:** `zod` DTOs through `nestjs-zod`
 - **Auth:** stateless access JWT + Postgres-backed rotating refresh sessions (revocable, reuse-detecting), custom guard — no Passport
-- **Email:** [`@onetodone/mailer`](https://github.com/onetodone/mailer) over SMTP (`nodemailer`) — address verification, password reset, password-changed notice
+- **Email:** [`@onetodone/mailer`](https://github.com/onetodone/mailer) over SMTP (`nodemailer`) — address verification, password reset, account notices, moderation notices
 - **Observability:** `nestjs-pino` structured logs, Prometheus `/metrics`, `/health` + `/health/ready`
 - **Rate limiting:** `@nestjs/throttler` (in-memory, per-IP)
 
@@ -37,7 +37,8 @@ POST /api/v1/urls                       GET /:shortCode
   UrlsService.create()                      1. in-process Promise dedupe map
     generateShortCode (async CSPRNG)        2. Redis GET  -> hit / negative sentinel
     prisma.url.create (retry on P2002)      3. miss: SET NX lock -> prisma.findUnique
-  -> 201 { shortCode, shortUrl, ... }              -> SET EX (url | "not-found")
+  -> 201 { shortCode, shortUrl, ... }              -> SET EX (url | "disabled" | "not-found")
+                                          disabled: -> 302 ${APP_URL}/link-disabled (no click)
                                           isHumanClick(method, headers)
                                             yes: ClicksService.increment(code)  (fire-and-forget)
                                             no:  http_redirects_bot_total++
@@ -90,8 +91,8 @@ endpoints (`/health`, `/health/ready`, `/metrics`).
 | Method & path                    | Auth                                 | Body                                                        | Result                                                                                                          |
 | -------------------------------- | ------------------------------------ | ----------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------- |
 | `POST /api/v1/auth/register`     | –                                    | `{ email, password }` (password 8–128)                      | `201 { user, accessToken }` + `refresh_token` cookie · emails a confirmation link                               |
-| `POST /api/v1/auth/login`        | –                                    | `{ email, password }`                                       | `200 { user, accessToken }` + `refresh_token` cookie                                                            |
-| `POST /api/v1/auth/refresh`      | `refresh_token` cookie               | –                                                           | `200 { user, accessToken }` + rotated `refresh_token` cookie                                                    |
+| `POST /api/v1/auth/login`        | –                                    | `{ email, password }`                                       | `200 { user, accessToken }` + `refresh_token` cookie · `403 ACCOUNT_SUSPENDED`                                  |
+| `POST /api/v1/auth/refresh`      | `refresh_token` cookie               | –                                                           | `200 { user, accessToken }` + rotated `refresh_token` cookie · `403 ACCOUNT_SUSPENDED`                          |
 | `POST /api/v1/auth/logout`       | Bearer access token                  | –                                                           | `204` — revokes this session · clears the cookie                                                                |
 | `POST /api/v1/auth/logout-all`   | Bearer access token                  | –                                                           | `204` — revokes every session the caller owns                                                                   |
 | `GET /api/v1/auth/me`            | Bearer access token                  | –                                                           | `200 { id, email, emailVerified, createdAt }`                                                                   |
@@ -103,12 +104,13 @@ endpoints (`/health`, `/health/ready`, `/metrics`).
 | `POST /api/v1/auth/me/email`     | Bearer access token                  | `{ newEmail, password }`                                    | `204` — emails a confirmation link to the new address and a notice to the current one · `400` same address · `403 INVALID_PASSWORD` · `429 EMAIL_COOLDOWN` |
 | `POST /api/v1/auth/email/confirm` | –                                   | `{ token }`                                                 | `200 { user }` with the new address · `400 INVALID_TOKEN` · `409` address taken                                 |
 | `DELETE /api/v1/auth/me`         | Bearer access token                  | `{ password }`                                              | `204` — deletes the account and all its links · clears the cookie · `403 INVALID_PASSWORD`                      |
-| `POST /api/v1/urls`              | Bearer access token                  | `{ url, note? }` (`http`/`https`, ≤ 2048 chars; note ≤ 200) | `201 { shortCode, shortUrl, originalUrl, note, createdAt, updatedAt }` · `403` unconfirmed email · `422` destination rule · `429` quota                                        |
+| `POST /api/v1/urls`              | Bearer access token                  | `{ url, note? }` (`http`/`https`, ≤ 2048 chars; note ≤ 200) | `201 { shortCode, shortUrl, originalUrl, note, createdAt, updatedAt }` · `403` unconfirmed email or suspended account · `422` destination rule · `429` quota                                        |
 | `GET /api/v1/urls`               | Bearer access token                  | `?limit` (1–100, def. 20), `?offset` (≥ 0, def. 0)          | `200 { items[], total, limit, offset }` — caller's URLs, newest first                                           |
-| `GET /api/v1/urls/:shortCode`    | Bearer access token (**owner only**) | –                                                           | `200 { shortCode, shortUrl, originalUrl, note, clicks, createdAt, updatedAt }` · `404` unknown **or** not owner |
-| `PATCH /api/v1/urls/:shortCode`  | Bearer access token (**owner only**) | `{ url?, note? }` (at least one)                            | `200` — same body as `GET` · `403` unconfirmed email · `404` unknown **or** not owner · `422` destination rule                                                   |
+| `GET /api/v1/urls/:shortCode`    | Bearer access token (**owner only**) | –                                                           | `200 { shortCode, shortUrl, originalUrl, note, clicks, disabled, disabledReason, createdAt, updatedAt }` · `404` unknown **or** not owner |
+| `PATCH /api/v1/urls/:shortCode`  | Bearer access token (**owner only**) | `{ url?, note? }` (at least one)                            | `200` — same body as `GET` · `403` unconfirmed email or suspended account · `404` unknown **or** not owner · `422` destination rule                                                   |
 | `DELETE /api/v1/urls/:shortCode` | Bearer access token (**owner only**) | –                                                           | `204` · `404` unknown **or** not owner                                                                          |
-| `GET /:shortCode`                | –                                    | –                                                           | `302 Location: <originalUrl>` (`301` with `REDIRECT_STATUS=301`) · `404` unknown / malformed                    |
+| `GET /:shortCode`                | –                                    | –                                                           | `302 Location: <originalUrl>` (`301` with `REDIRECT_STATUS=301`) · disabled: `302 ${APP_URL}/link-disabled` · `404` unknown / malformed |
+| `GET /`                          | –                                    | –                                                           | `302 Location: ${APP_URL}`                                                                                      |
 | `GET /health`                    | –                                    | –                                                           | `200 { status: "ok" }` (liveness)                                                                               |
 | `GET /health/ready`              | –                                    | –                                                           | `200 { status, database, redis }` · `503` if a dependency is down                                               |
 | `GET /metrics`                   | –                                    | –                                                           | `200` Prometheus text exposition                                                                                |
@@ -197,6 +199,44 @@ their next refresh.
 removes the links' cached destinations, unflushed clicks and the account's creation quota from Redis,
 so a deleted link answers `404` at once. A goodbye email goes to the address. Access tokens already
 issued stay valid until they expire, but every account route then answers `401`.
+
+### Moderation
+
+The operator disables links and suspends accounts with commands that run from the build, against
+the database, Redis and SMTP server in `.env`:
+
+```bash
+pnpm build                                   # the commands run dist/src/cli/moderation.js
+pnpm link:disable <code|url> [--unsafe] [--owner]
+pnpm link:enable <code|url>
+pnpm user:suspend <email|code|url>
+pnpm user:unsuspend <email|code|url>
+```
+
+A target is a short code, a short URL (`https://s.example/aB3xK9p`) or, for the `user:` commands, an
+email address; a code or URL names the account that owns the link. Every command evicts the cached
+resolutions it changes, so redirects follow at once, and emails the owner. Repeating a command
+reports the target as unchanged and sends nothing.
+
+A disabled link redirects with an uncacheable `302` to `${APP_URL}/link-disabled`, whatever
+`REDIRECT_STATUS` is, and counts no click (`http_redirects_disabled_total`). The cache holds it as
+`disabled`, so the redirect stays a single Redis read. List and detail responses carry `disabled`
+and `disabledReason`:
+
+| `disabledReason`     | Set by                                       | Lifted by                                                     |
+| -------------------- | -------------------------------------------- | ------------------------------------------------------------- |
+| `MANUAL`             | `link:disable`                               | `link:enable` only — survives the owner's edits               |
+| `UNSAFE_DESTINATION` | `link:disable --unsafe`                      | `link:enable`, or the owner `PATCH`ing a different `url`      |
+| `ACCOUNT_SUSPENDED`  | `user:suspend`, on every link still enabled  | `user:unsuspend`, which re-enables exactly these links        |
+
+`user:suspend` revokes every session of the account. Signing in then answers `403` with
+`code: "ACCOUNT_SUSPENDED"` and `supportEmail` (`SUPPORT_EMAIL`, also named in `message`), and so
+does creating or editing a link with an access token issued before the suspension. `link:disable
+--owner` disables the link as `MANUAL` and suspends its owner, so lifting the suspension leaves that
+link off. `link:enable` on a link of a suspended account marks it `ACCOUNT_SUSPENDED`, so it comes
+back with the account.
+
+`GET /` on the service redirects to `APP_URL`, so the bare short-link domain opens the frontend.
 
 ### Destination rules and creation quota
 
@@ -327,6 +367,7 @@ the `env` object it exports. An invalid `.env` fails fast at startup.
   | `urls_created_total`        | successful `POST /api/v1/urls`                               |
   | `http_redirects_total`      | successful redirects                                         |
   | `http_redirects_bot_total`  | redirects not counted as clicks (bots, prefetches, `HEAD`)   |
+  | `http_redirects_disabled_total` | requests for disabled links, sent to the link-disabled page |
   | `clicks_flushed_total`      | buffered clicks reconciled into Postgres                     |
   | `clicks_flush_errors_total` | flush cycles that failed and were re-buffered                |
   | `process_uptime_seconds`    | gauge, seconds since the registry was created                |
@@ -458,6 +499,8 @@ pnpm loadtest:seed -- --reset --count 1     # drop the load-test rows
 | `pnpm loadtest:seed`                    | populate the load-test dataset                           |
 | `pnpm loadtest`                         | run the autocannon benchmark                             |
 | `pnpm smoke`                            | end-to-end smoke check against a running instance        |
+| `pnpm link:disable` / `link:enable`     | disable / re-enable a link (see [Moderation](#moderation)) |
+| `pnpm user:suspend` / `user:unsuspend`  | suspend an account / lift the suspension                 |
 
 ---
 
@@ -468,7 +511,8 @@ emits the decorator metadata Nest's dependency injection needs.
 
 - **Unit** (`test/unit/`) — pure logic: short-code generation, session token and hash helpers,
   duration parsing, env validation, the trusted-proxy rules, the request schemas, and the click filter
-  and redirect status, and the account-email and account-management request schemas.
+  and redirect status, the account-email and account-management request schemas, and the moderation
+  command and target parsing.
 - **Integration** (`test/integration/`) — the whole application, built by the same `createApp()` as
   `main.ts` and driven through Fastify's `inject()`, against real Postgres and Redis: registration,
   login, throttling, refresh rotation with the grace window and reuse revocation, logout, URL CRUD
@@ -476,7 +520,8 @@ emits the decorator metadata Nest's dependency injection needs.
   protection), click buffering and flushing, bots, prefetches and `HEAD` redirected without a click,
   email verification and its gate on link creation, password reset with session revocation, resend
   and reset cooldowns, token expiry and sweeping, password and email changes, account deletion with
-  its links and their cache keys, and the ops endpoints. The tests replace the SMTP
+  its links and their cache keys, link moderation and account suspension through the operator commands,
+  and the ops endpoints. The tests replace the SMTP
   transport with one that records each email, and read the links from it.
 
 Integration tests empty every table and every Redis key under their prefix, so they use a database
@@ -502,7 +547,7 @@ request, and on demand (`workflow_dispatch`):
   applies migrations, fails on any schema drift (`prisma migrate diff … --exit-code`), builds, boots
   the app, and runs `pnpm smoke` (`scripts/smoke.ts`) against it — liveness, readiness, auth, email
   verification, password reset and account management (links read from Mailpit's API at
-  `MAILPIT_URL`), create, redirect, and `/metrics`.
+  `MAILPIT_URL`), create, redirect, `/metrics`, and the moderation commands run from the build.
 
 ---
 
@@ -511,6 +556,7 @@ request, and on demand (`workflow_dispatch`):
 ```
 src/
   main.ts                    binds the port
+  cli/moderation.ts          operator commands (link:disable, link:enable, user:suspend, user:unsuspend) over a slim app context
   app.factory.ts             createApp(): Fastify adapter (trusted proxy), logger, Zod pipe, cookie, CORS — shared with the tests
   app.module.ts              config + logger + throttler + feature modules
   config/                    env.ts (single zod-validated env helper) + registerAs factories over it
@@ -521,9 +567,10 @@ src/
   common/types/http.d.ts     FastifyRequest / IncomingMessage `user` augmentation
   database/                  PrismaService (pg adapter, slow-query event log) + @Global module
   redis/                     tuned ioredis client + @Global module + InjectRedis()
-  mail/                      MailerModule from @onetodone/mailer/nestjs over the SMTP transport + MailService (background sends of the account emails)
+  mail/                      MailerModule from @onetodone/mailer/nestjs over the SMTP transport + MailService (background sends of the account and moderation emails) + the moderation templates
   modules/
     urls/                    create + list + get + update + delete + resolve, short-code CSPRNG, destination rules + shortener list, creation quota, click buffer, redirect controller + bot/prefetch click filter
+    moderation/              disable / enable links, suspend / restore accounts, with cache eviction and owner emails
     account/                 password change, email change + confirmation, account deletion with its links and cache keys
     auth/                    bcrypt, access-JWT issue/verify, rotating refresh sessions + reuse detection, logout, email verification + gate, password reset, email cooldowns, hourly sweep
     health/                  liveness + readiness

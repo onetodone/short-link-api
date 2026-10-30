@@ -1,6 +1,6 @@
 {
   "name": "@onetodone/short-link-api",
-  "version": "1.6.0",
+  "version": "1.7.0",
   "description": "High-performance URL shortener API (NestJS + Fastify + Prisma + Redis)",
   "private": true,
   "author": "Anton Holubeu (https://github.com/aholu)",
@@ -25,6 +25,10 @@
     "loadtest:seed": "tsx scripts/seed-loadtest.ts",
     "loadtest": "tsx scripts/load-test.ts",
     "smoke": "tsx scripts/smoke.ts",
+    "link:disable": "node dist/src/cli/moderation link:disable",
+    "link:enable": "node dist/src/cli/moderation link:enable",
+    "user:suspend": "node dist/src/cli/moderation user:suspend",
+    "user:unsuspend": "node dist/src/cli/moderation user:unsuspend",
     "test": "vitest run",
     "test:unit": "vitest run --project unit",
     "test:integration": "vitest run --project integration"
