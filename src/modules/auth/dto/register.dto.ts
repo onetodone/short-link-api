@@ -6,6 +6,7 @@ import { captchaTokenField, emailField, newPasswordField } from '@/modules/auth/
 export const registerSchema = z.object({
   email: emailField,
   password: newPasswordField,
+  acceptTerms: z.literal(true, { error: 'You must accept the Terms of Use' }),
   captchaToken: captchaTokenField,
 })
 

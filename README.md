@@ -1,7 +1,7 @@
 # Short Link API
 
 [![CI Status](https://github.com/onetodone/short-link-api/actions/workflows/ci.yml/badge.svg)](https://github.com/onetodone/short-link-api/actions/workflows/ci.yml)
-[![Version](https://img.shields.io/badge/version-1.9.0-blue.svg)](./package.json)
+[![Version](https://img.shields.io/badge/version-2.0.0-blue.svg)](./package.json)
 [![pnpm](https://img.shields.io/badge/pnpm-v12-F69220?logo=pnpm&logoColor=white)](https://pnpm.io/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](./LICENSE)
 
@@ -101,7 +101,7 @@ endpoints (`/health`, `/health/ready`, `/metrics`).
 
 | Method & path                    | Auth                                 | Body                                                        | Result                                                                                                          |
 | -------------------------------- | ------------------------------------ | ----------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------- |
-| `POST /api/v1/auth/register`     | –                                    | `{ email, password, captchaToken? }` (password 8–128)       | `201 { user, accessToken }` + `refresh_token` cookie · emails a confirmation link · `400 CAPTCHA_REQUIRED` / `CAPTCHA_FAILED` · `503 CAPTCHA_UNAVAILABLE` |
+| `POST /api/v1/auth/register`     | –                                    | `{ email, password, acceptTerms: true, captchaToken? }` (password 8–128) | `201 { user, accessToken }` + `refresh_token` cookie · emails a confirmation link · `400` without `acceptTerms: true` · `400 CAPTCHA_REQUIRED` / `CAPTCHA_FAILED` · `503 CAPTCHA_UNAVAILABLE` |
 | `POST /api/v1/auth/login`        | –                                    | `{ email, password, captchaToken? }`                        | `200 { user, accessToken }` + `refresh_token` cookie · `401 { captchaRequired }` · `403 ACCOUNT_SUSPENDED` · `400 CAPTCHA_REQUIRED` / `CAPTCHA_FAILED` · `503 CAPTCHA_UNAVAILABLE` |
 | `POST /api/v1/auth/refresh`      | `refresh_token` cookie               | –                                                           | `200 { user, accessToken }` + rotated `refresh_token` cookie · `403 ACCOUNT_SUSPENDED`                          |
 | `POST /api/v1/auth/logout`       | Bearer access token                  | –                                                           | `204` — revokes this session · clears the cookie                                                                |
@@ -164,6 +164,13 @@ re-normalised the same way as on create, and `updatedAt` is bumped. Redis stays 
 cached destination is evicted when `PATCH` changes the URL (a note-only edit leaves it cached) and on
 `DELETE`, which also drops the code's pending click buffer so a later flush cannot revive a deleted
 row.
+
+### Terms of Use
+
+`POST /auth/register` requires `"acceptTerms": true`; anything else is a `400` validation error on
+`acceptTerms`, returned before the [Turnstile check](#bot-protection). The time of acceptance is
+stored in `users.termsAcceptedAt` (the migration that adds the column fills it with `createdAt` for
+existing accounts).
 
 ### Email verification and password reset
 
@@ -360,7 +367,7 @@ the prefix from every other single-segment route (e.g. `GET /api/v1/urls`).
 # register -> capture the access token
 TOKEN=$(curl -sX POST localhost:3000/api/v1/auth/register \
   -H 'content-type: application/json' \
-  -d '{"email":"a@b.com","password":"password123"}' | jq -r .accessToken)
+  -d '{"email":"a@b.com","password":"password123","acceptTerms":true}' | jq -r .accessToken)
 
 # confirm the address with the token from the emailed link
 curl -sX POST localhost:3000/api/v1/auth/verify-email \
@@ -593,7 +600,7 @@ emits the decorator metadata Nest's dependency injection needs.
   Turnstile `siteverify` client.
 - **Integration** (`test/integration/`) — the whole application, built by the same `createApp()` as
   `main.ts` and driven through Fastify's `inject()`, against real Postgres and Redis: registration,
-  login, throttling, refresh rotation with the grace window and reuse revocation, logout, URL CRUD
+  terms acceptance, login, throttling, refresh rotation with the grace window and reuse revocation, logout, URL CRUD
   with ownership checks and cache eviction, the redirect cache (hit, miss, negative entry, stampede
   protection), click buffering and flushing, bots, prefetches and `HEAD` redirected without a click,
   email verification and its gate on link creation, password reset with session revocation, resend

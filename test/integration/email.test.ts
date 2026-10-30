@@ -46,7 +46,7 @@ async function nextEmail() {
 
 describe('email verification', () => {
   it('emails a confirmation link on registration and reports the address as unconfirmed', async () => {
-    const response = await post('register', { email: 'fresh@example.com', password: PASSWORD })
+    const response = await post('register', { email: 'fresh@example.com', password: PASSWORD, acceptTerms: true })
     expect(response.statusCode).toBe(201)
     expect(response.json()).toMatchObject({ user: { email: 'fresh@example.com', emailVerified: false } })
 
