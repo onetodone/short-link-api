@@ -44,6 +44,7 @@ model User {
   emailVerifiedAt   DateTime?
   passwordChangedAt DateTime?
   suspendedAt       DateTime?
+  termsAcceptedAt   DateTime
   createdAt         DateTime  @default(now())
   updatedAt         DateTime  @updatedAt
 

@@ -31,7 +31,12 @@ function post(path: string, payload: object, ip = nextIp()) {
 }
 
 async function createAccount(email = uniqueEmail()): Promise<string> {
-  const response = await post('register', { email, password: PASSWORD, captchaToken: validToken('register') })
+  const response = await post('register', {
+    email,
+    password: PASSWORD,
+    acceptTerms: true,
+    captchaToken: validToken('register'),
+  })
   expect(response.statusCode).toBe(201)
   turnstile.reset()
   return email
@@ -56,7 +61,7 @@ describe('GET /api/v1/config', () => {
 
 describe('registration', () => {
   it('requires a token', async () => {
-    const response = await post('register', { email: uniqueEmail(), password: PASSWORD })
+    const response = await post('register', { email: uniqueEmail(), password: PASSWORD, acceptTerms: true })
     expect(response.statusCode).toBe(400)
     expect(response.json()).toMatchObject({ code: 'CAPTCHA_REQUIRED' })
     expect(turnstile.requests).toHaveLength(0)
@@ -67,7 +72,12 @@ describe('registration', () => {
     ['a rejected token', 'forged'],
     ['a token for another form', validToken('login')],
   ])('refuses %s', async (_case, captchaToken) => {
-    const response = await post('register', { email: uniqueEmail(), password: PASSWORD, captchaToken })
+    const response = await post('register', {
+      email: uniqueEmail(),
+      password: PASSWORD,
+      acceptTerms: true,
+      captchaToken,
+    })
     expect(response.statusCode).toBe(400)
     expect(response.json()).toMatchObject({ code: 'CAPTCHA_FAILED' })
     expect(await t.prisma.user.count()).toBe(0)
@@ -77,7 +87,7 @@ describe('registration', () => {
     const ip = nextIp()
     const response = await post(
       'register',
-      { email: uniqueEmail(), password: PASSWORD, captchaToken: validToken('register') },
+      { email: uniqueEmail(), password: PASSWORD, acceptTerms: true, captchaToken: validToken('register') },
       ip,
     )
     expect(response.statusCode).toBe(201)
@@ -86,11 +96,22 @@ describe('registration', () => {
     ])
   })
 
+  it('rejects a body without accepted terms before calling Cloudflare', async () => {
+    const response = await post('register', {
+      email: uniqueEmail(),
+      password: PASSWORD,
+      captchaToken: validToken('register'),
+    })
+    expect(response.statusCode).toBe(400)
+    expect(turnstile.requests).toHaveLength(0)
+  })
+
   it('fails closed when Cloudflare is unreachable', async () => {
     turnstile.fail()
     const response = await post('register', {
       email: uniqueEmail(),
       password: PASSWORD,
+      acceptTerms: true,
       captchaToken: validToken('register'),
     })
     expect(response.statusCode).toBe(503)

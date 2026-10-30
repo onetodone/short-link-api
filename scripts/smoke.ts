@@ -175,10 +175,20 @@ async function main(): Promise<void> {
     email: `smoke+${Date.now()}@short-link.test`,
     password: 'smoke-test-password-123',
   }
-  const registerRes = await fetch(apiUrl('auth/register'), {
+  const declinedRes = await fetch(apiUrl('auth/register'), {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ ...credentials, captchaToken }),
+  })
+  assert(
+    declinedRes.status === 400,
+    `POST /${API_PREFIX}/auth/register without acceptTerms -> 400 (got ${declinedRes.status})`,
+  )
+
+  const registerRes = await fetch(apiUrl('auth/register'), {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ ...credentials, acceptTerms: true, captchaToken }),
   })
   const registerBody = (await registerRes.json().catch(() => ({}))) as {
     accessToken?: unknown

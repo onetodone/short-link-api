@@ -42,7 +42,7 @@ export async function register(
     method: 'POST',
     url: '/api/v1/auth/register',
     headers: { 'x-forwarded-for': nextIp() },
-    payload: { email, password: PASSWORD },
+    payload: { email, password: PASSWORD, acceptTerms: true },
   })
   if (response.statusCode !== 201) {
     throw new Error(`register failed: ${response.statusCode} ${response.body}`)

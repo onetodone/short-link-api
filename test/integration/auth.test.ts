@@ -29,11 +29,12 @@ function refresh(token: string, ip = nextIp()) {
 describe('POST /api/v1/auth/register', () => {
   it('creates the account, returns an access token and sets the refresh cookie', async () => {
     const ip = nextIp()
+    const before = Date.now()
     const response = await t.app.inject({
       method: 'POST',
       url: '/api/v1/auth/register',
       headers: { 'x-forwarded-for': ip, 'user-agent': 'vitest' },
-      payload: { email: ' New@Example.COM ', password: PASSWORD },
+      payload: { email: ' New@Example.COM ', password: PASSWORD, acceptTerms: true },
     })
 
     expect(response.statusCode).toBe(201)
@@ -49,6 +50,10 @@ describe('POST /api/v1/auth/register', () => {
 
     const session = await t.prisma.session.findFirstOrThrow()
     expect(session).toMatchObject({ ipAddress: ip, userAgent: 'vitest', generation: 0 })
+
+    const { termsAcceptedAt } = await t.prisma.user.findFirstOrThrow()
+    expect(termsAcceptedAt.getTime()).toBeGreaterThanOrEqual(before)
+    expect(termsAcceptedAt.getTime()).toBeLessThanOrEqual(Date.now())
   })
 
   it('rejects a taken email regardless of letter case', async () => {
@@ -57,7 +62,7 @@ describe('POST /api/v1/auth/register', () => {
       method: 'POST',
       url: '/api/v1/auth/register',
       headers: { 'x-forwarded-for': nextIp() },
-      payload: { email: 'TAKEN@example.com', password: PASSWORD },
+      payload: { email: 'TAKEN@example.com', password: PASSWORD, acceptTerms: true },
     })
     expect(response.statusCode).toBe(409)
   })
@@ -71,7 +76,24 @@ describe('POST /api/v1/auth/register', () => {
     })
     expect(response.statusCode).toBe(400)
     const paths = response.json<{ errors: { path: string[] }[] }>().errors.map((issue) => issue.path.join('.'))
-    expect(paths).toEqual(expect.arrayContaining(['email', 'password']))
+    expect(paths).toEqual(expect.arrayContaining(['email', 'password', 'acceptTerms']))
+  })
+
+  it.each([
+    ['missing', {}],
+    ['declined', { acceptTerms: false }],
+  ])('refuses an account when the terms are %s', async (_case, terms) => {
+    const response = await t.app.inject({
+      method: 'POST',
+      url: '/api/v1/auth/register',
+      headers: { 'x-forwarded-for': nextIp() },
+      payload: { email: uniqueEmail(), password: PASSWORD, ...terms },
+    })
+    expect(response.statusCode).toBe(400)
+    expect(response.json()).toMatchObject({
+      errors: [{ path: ['acceptTerms'], message: 'You must accept the Terms of Use' }],
+    })
+    expect(await t.prisma.user.count()).toBe(0)
   })
 })
 

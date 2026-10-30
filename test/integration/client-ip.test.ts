@@ -74,7 +74,7 @@ describe('client IP behind the front', () => {
       method: 'POST',
       url: '/api/v1/auth/register',
       headers: { 'x-forwarded-for': FRONT_EGRESS, 'x-proxy-secret': SECRET, 'x-client-ip': '203.0.113.77' },
-      payload: { email: uniqueEmail(), password: PASSWORD },
+      payload: { email: uniqueEmail(), password: PASSWORD, acceptTerms: true },
     })
 
     expect(response.statusCode).toBe(201)

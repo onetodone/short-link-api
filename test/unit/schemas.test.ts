@@ -49,19 +49,31 @@ describe('updateUrlSchema', () => {
 })
 
 describe('registerSchema', () => {
+  const terms = { acceptTerms: true }
+
   it('trims and lowercases the email', () => {
-    expect(registerSchema.parse({ email: ' User@Example.COM ', password: 'password1' }).email).toBe('user@example.com')
+    expect(registerSchema.parse({ email: ' User@Example.COM ', password: 'password1', ...terms }).email).toBe(
+      'user@example.com',
+    )
+  })
+
+  it.each([[undefined], [false], ['true'], [1]])('rejects acceptTerms %j', (acceptTerms) => {
+    const result = registerSchema.safeParse({ email: 'a@b.co', password: 'password1', acceptTerms })
+    expect(result.success).toBe(false)
+    expect(result.error?.issues).toEqual([
+      expect.objectContaining({ path: ['acceptTerms'], message: 'You must accept the Terms of Use' }),
+    ])
   })
 
   it.each([
     ['short', 'password'],
     ['x'.repeat(129), 'password'],
   ])('rejects a password of %#', (password) => {
-    expect(registerSchema.safeParse({ email: 'a@b.co', password }).success).toBe(false)
+    expect(registerSchema.safeParse({ email: 'a@b.co', password, ...terms }).success).toBe(false)
   })
 
   it('rejects an invalid email', () => {
-    expect(registerSchema.safeParse({ email: 'not-an-email', password: 'password1' }).success).toBe(false)
+    expect(registerSchema.safeParse({ email: 'not-an-email', password: 'password1', ...terms }).success).toBe(false)
   })
 })
 

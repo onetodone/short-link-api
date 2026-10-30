@@ -58,7 +58,12 @@ export class AuthService {
 
     let user: AuthUser
     try {
-      user = toAuthUser(await this.prisma.user.create({ data: { email, passwordHash }, select: USER_SELECT }))
+      user = toAuthUser(
+        await this.prisma.user.create({
+          data: { email, passwordHash, termsAcceptedAt: new Date() },
+          select: USER_SELECT,
+        }),
+      )
     } catch (error) {
       if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002') {
         throw new ConflictException('Email is already registered')

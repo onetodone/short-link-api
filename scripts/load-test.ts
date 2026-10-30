@@ -52,7 +52,12 @@ async function acquireToken(): Promise<string> {
 
   // First ever run against a fresh DB — register the fixture account once.
   if (res.status === 401 || res.status === 404) {
-    res = await fetch(`${target}/api/v1/auth/register`, { method: 'POST', headers, body })
+    const registerBody = JSON.stringify({
+      email: LOADTEST_USER_EMAIL,
+      password: LOADTEST_USER_PASSWORD,
+      acceptTerms: true,
+    })
+    res = await fetch(`${target}/api/v1/auth/register`, { method: 'POST', headers, body: registerBody })
   }
 
   if (res.status === 429) {
