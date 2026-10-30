@@ -168,8 +168,10 @@ jobs:
       SMTP_PORT: '1025'
       SMTP_FROM_EMAIL: noreply@example.com
       SMTP_FROM_NAME: Short Link CI
-      # Off, so CI never calls Google; the integration tests use a stand-in for the API.
+      # Off, so CI never calls Google or Cloudflare; the integration tests use stand-ins.
       SAFE_BROWSING_API_KEY: ''
+      TURNSTILE_SITE_KEY: ''
+      TURNSTILE_SECRET_KEY: ''
 
     steps:
       - uses: actions/checkout@v7

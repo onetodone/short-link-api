@@ -23,6 +23,12 @@ const COUNTERS: readonly CounterMeta[] = [
     help: 'Safe Browsing lookups that failed or timed out; the destination was let through',
   },
   { name: 'safe_browsing_flagged_total', help: 'Destinations Safe Browsing flagged, rejected on save or disabled' },
+  { name: 'captcha_checks_total', help: 'Turnstile tokens sent to Cloudflare siteverify' },
+  { name: 'captcha_rejected_total', help: 'Turnstile tokens Cloudflare rejected or issued for another form' },
+  {
+    name: 'captcha_errors_total',
+    help: 'Turnstile checks that failed or timed out; the request was refused',
+  },
 ] as const
 
 @Injectable()

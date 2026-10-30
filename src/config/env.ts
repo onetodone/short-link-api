@@ -65,6 +65,9 @@ const envSchema = z
     URL_CREATE_DAILY_LIMIT: z.coerce.number().int().min(0).default(10),
     SAFE_BROWSING_API_KEY: optionalString,
 
+    TURNSTILE_SITE_KEY: optionalString,
+    TURNSTILE_SECRET_KEY: optionalString,
+
     APP_URL: z.url({ protocol: /^https?$/ }).transform((value) => value.replace(/\/+$/, '')),
     SUPPORT_EMAIL: z.email(),
     SMTP_HOST: z.string().min(1),
@@ -84,6 +87,10 @@ const envSchema = z
   .refine((value) => value.SMTP_FROM_EMAIL ?? value.SMTP_USER, {
     path: ['SMTP_FROM_EMAIL'],
     message: 'SMTP_FROM_EMAIL or SMTP_USER must be set',
+  })
+  .refine((value) => (value.TURNSTILE_SITE_KEY === undefined) === (value.TURNSTILE_SECRET_KEY === undefined), {
+    path: ['TURNSTILE_SECRET_KEY'],
+    message: 'TURNSTILE_SITE_KEY and TURNSTILE_SECRET_KEY must be set together',
   })
 
 type EnvVars = z.infer<typeof envSchema>

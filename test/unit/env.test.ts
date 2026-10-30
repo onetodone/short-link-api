@@ -54,6 +54,19 @@ describe('validateEnv', () => {
     expect(() => validateEnv({ ...REQUIRED, FRONT_PROXY_SECRET: 'too-short' })).toThrow('FRONT_PROXY_SECRET')
   })
 
+  it('takes both Turnstile keys or neither', () => {
+    expect(validateEnv({ ...REQUIRED, TURNSTILE_SITE_KEY: '', TURNSTILE_SECRET_KEY: '' })).toMatchObject({
+      TURNSTILE_SITE_KEY: undefined,
+      TURNSTILE_SECRET_KEY: undefined,
+    })
+    expect(validateEnv({ ...REQUIRED, TURNSTILE_SITE_KEY: 'site', TURNSTILE_SECRET_KEY: 'secret' })).toMatchObject({
+      TURNSTILE_SITE_KEY: 'site',
+      TURNSTILE_SECRET_KEY: 'secret',
+    })
+    expect(() => validateEnv({ ...REQUIRED, TURNSTILE_SITE_KEY: 'site' })).toThrow('TURNSTILE_SECRET_KEY')
+    expect(() => validateEnv({ ...REQUIRED, TURNSTILE_SECRET_KEY: 'secret' })).toThrow('TURNSTILE_SECRET_KEY')
+  })
+
   it('accepts only known TRUSTED_PROXY modes', () => {
     for (const mode of ['private', 'all', 'none']) {
       expect(validateEnv({ ...REQUIRED, TRUSTED_PROXY: mode }).TRUSTED_PROXY).toBe(mode)

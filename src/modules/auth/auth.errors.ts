@@ -76,3 +76,63 @@ export class AccountSuspendedException extends HttpException {
     )
   }
 }
+
+/** `401` for a wrong email or password; `captchaRequired` says whether the next attempt needs a Turnstile token. */
+export class InvalidCredentialsException extends HttpException {
+  constructor(captchaRequired: boolean) {
+    super(
+      {
+        statusCode: HttpStatus.UNAUTHORIZED,
+        message: 'Invalid email or password',
+        error: 'Unauthorized',
+        captchaRequired,
+      },
+      HttpStatus.UNAUTHORIZED,
+    )
+  }
+}
+
+/** `400` with `code: CAPTCHA_REQUIRED`: the form needs a Turnstile token in `captchaToken`. */
+export class CaptchaRequiredException extends HttpException {
+  constructor() {
+    super(
+      {
+        statusCode: HttpStatus.BAD_REQUEST,
+        message: 'Complete the verification to continue',
+        error: 'Bad Request',
+        code: 'CAPTCHA_REQUIRED',
+      },
+      HttpStatus.BAD_REQUEST,
+    )
+  }
+}
+
+/** `400` with `code: CAPTCHA_FAILED`: Turnstile rejected the token, or it was issued for another form. */
+export class CaptchaFailedException extends HttpException {
+  constructor() {
+    super(
+      {
+        statusCode: HttpStatus.BAD_REQUEST,
+        message: 'Verification failed, please try again',
+        error: 'Bad Request',
+        code: 'CAPTCHA_FAILED',
+      },
+      HttpStatus.BAD_REQUEST,
+    )
+  }
+}
+
+/** `503` with `code: CAPTCHA_UNAVAILABLE`: Turnstile couldn't be reached, so the form is refused. */
+export class CaptchaUnavailableException extends HttpException {
+  constructor() {
+    super(
+      {
+        statusCode: HttpStatus.SERVICE_UNAVAILABLE,
+        message: 'Verification is unavailable, please try again in a few minutes',
+        error: 'Service Unavailable',
+        code: 'CAPTCHA_UNAVAILABLE',
+      },
+      HttpStatus.SERVICE_UNAVAILABLE,
+    )
+  }
+}
