@@ -6,6 +6,7 @@ import { version } from '../../package.json'
 
 export const appConfig = registerAs('app', () => ({
   nodeEnv: env.NODE_ENV,
+  host: env.HOST,
   port: env.PORT,
   apiPrefix: env.API_PREFIX,
   corsOrigin: env.CORS_ORIGIN,

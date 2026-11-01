@@ -1,7 +1,7 @@
 # Short Link API
 
 [![CI Status](https://github.com/onetodone/short-link-api/actions/workflows/ci.yml/badge.svg)](https://github.com/onetodone/short-link-api/actions/workflows/ci.yml)
-[![Version](https://img.shields.io/badge/version-2.0.0-blue.svg)](./package.json)
+[![Version](https://img.shields.io/badge/version-2.1.0-blue.svg)](./package.json)
 [![pnpm](https://img.shields.io/badge/pnpm-v12-F69220?logo=pnpm&logoColor=white)](https://pnpm.io/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](./LICENSE)
 
@@ -395,6 +395,7 @@ the `env` object it exports. An invalid `.env` fails fast at startup.
 | Key                                            | Default                   | Purpose                                          |
 | ---------------------------------------------- | ------------------------- | ------------------------------------------------ |
 | `NODE_ENV`                                     | `development`             | `development` \| `production` \| `test`          |
+| `HOST`                                         | `0.0.0.0`                 | HTTP listen address                              |
 | `PORT`                                         | `3000`                    | HTTP listen port                                 |
 | `API_PREFIX`                                   | `api/v1`                  | Prefix for the JSON API                          |
 | `CORS_ORIGIN`                                  | –                         | Comma-separated allow-list (`*` = reflect any)   |
