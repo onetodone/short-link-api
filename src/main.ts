@@ -6,9 +6,11 @@ import { createApp } from '@/app.factory'
 
 async function bootstrap(): Promise<void> {
   const app = await createApp()
-  const port = app.get(ConfigService).get<number>('app.port', 3000)
+  const config = app.get(ConfigService)
+  const host = config.get<string>('app.host', '0.0.0.0')
+  const port = config.get<number>('app.port', 3000)
 
-  await app.listen(port, '0.0.0.0')
+  await app.listen(port, host)
 }
 
 void bootstrap()

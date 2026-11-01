@@ -17,6 +17,7 @@ const optionalBoolean = z
 const envSchema = z
   .object({
     NODE_ENV: z.enum(['development', 'production', 'test']).default('production'),
+    HOST: z.string().min(1).default('0.0.0.0'),
     PORT: z.coerce.number().int().min(1).default(3000),
     API_PREFIX: z
       .string()
