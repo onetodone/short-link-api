@@ -22,6 +22,7 @@ describe('validateEnv', () => {
       API_PREFIX: 'api/v1',
       TRUSTED_PROXY: 'private',
       REDIS_TLS: false,
+      REDIS_DB: 0,
       SHORT_CODE_LENGTH: 7,
       REDIRECT_STATUS: 302,
       URL_CREATE_DAILY_LIMIT: 10,
@@ -30,8 +31,9 @@ describe('validateEnv', () => {
   })
 
   it('coerces numbers and booleans and trims the API prefix', () => {
-    const env = validateEnv({ ...REQUIRED, PORT: '3600', REDIS_TLS: 'true', API_PREFIX: '/api/v2/' })
+    const env = validateEnv({ ...REQUIRED, PORT: '3600', REDIS_DB: '2', REDIS_TLS: 'true', API_PREFIX: '/api/v2/' })
     expect(env.PORT).toBe(3600)
+    expect(env.REDIS_DB).toBe(2)
     expect(env.REDIS_TLS).toBe(true)
     expect(env.API_PREFIX).toBe('api/v2')
   })
