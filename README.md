@@ -1,7 +1,7 @@
 # Short Link API
 
 [![CI Status](https://github.com/onetodone/short-link-api/actions/workflows/ci.yml/badge.svg)](https://github.com/onetodone/short-link-api/actions/workflows/ci.yml)
-[![Version](https://img.shields.io/badge/version-2.1.0-blue.svg)](./package.json)
+[![Version](https://img.shields.io/badge/version-2.2.0-blue.svg)](./package.json)
 [![pnpm](https://img.shields.io/badge/pnpm-v12-F69220?logo=pnpm&logoColor=white)](https://pnpm.io/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](./LICENSE)
 
@@ -404,6 +404,7 @@ the `env` object it exports. An invalid `.env` fails fast at startup.
 | `FRONT_PROXY_SECRET`                           | –                         | ≥ 32 chars; lets the frontend pass the client IP |
 | `DATABASE_URL`                                 | –                         | Postgres connection string (required)            |
 | `REDIS_HOST` / `REDIS_PORT` / `REDIS_PASSWORD` | `localhost` / `6379` / –  | Redis connection                                 |
+| `REDIS_DB`                                     | `0`                       | Redis logical database index                     |
 | `REDIS_KEY_PREFIX`                             | `shortlink:`              | Prefix on every Redis key                        |
 | `REDIS_TLS`                                    | `false`                   | `true` for TLS-only providers (e.g. Upstash)     |
 | `LOG_LEVEL`                                    | `debug` dev / `info` prod | pino level                                       |
